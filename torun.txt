@@ -1,0 +1,27 @@
+Normal GUI:
+    python src/main.py --sumocfg scenario/simulation.sumocfg
+Headless test:
+    python src/main.py --sumocfg scenario/simulation.sumocfg --headless
+Full baseline comparison:
+    python src/main.py --sumocfg scenario/simulation.sumocfg --compare 
+
+For more time to run the stimulation
+    python src/main.py --sumocfg scenario/simulation.sumocfg --max-steps 7200 --post-ev-seconds 180
+python src/main.py --sumocfg scenario/simulation.sumocfg --compare
+
+
+
+For DQN
+To train: python src/train_rl.py --sumocfg scenario/simulation.sumocfg
+Run with RL: python src/main.py --sumocfg scenario/simulation.sumocfg --mode rl_model --model-path outputs/models/dqn.pt
+
+To Train with episode number: python src/train_rl.py --sumocfg scenario/simulation.sumocfg --episodes 500
+
+
+
+
+
+
+To run full-based: python src/main.py --sumocfg scenario/grid/grid.sumocfg
+To run with RL: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt
+Train DL: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --episodes 20 --max-steps 300

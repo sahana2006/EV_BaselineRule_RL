@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nodes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/nodes_file.xsd">
+    <!-- Main horizontal corridor -->
+    <node id="w0" x="0.0" y="0.0" type="priority"/>
+    <node id="j1" x="120.0" y="0.0" type="traffic_light"/>
+    <node id="j2" x="240.0" y="0.0" type="traffic_light"/>
+    <node id="j3" x="360.0" y="0.0" type="traffic_light"/>
+    <node id="j4" x="480.0" y="0.0" type="traffic_light"/>
+    <node id="e0" x="600.0" y="0.0" type="priority"/>
+
+    <!-- Vertical roads crossing each signalized intersection -->
+    <node id="j1_n" x="120.0" y="120.0" type="priority"/>
+    <node id="j1_s" x="120.0" y="-120.0" type="priority"/>
+    <node id="j2_n" x="240.0" y="120.0" type="priority"/>
+    <node id="j2_s" x="240.0" y="-120.0" type="priority"/>
+    <node id="j3_n" x="360.0" y="120.0" type="priority"/>
+    <node id="j3_s" x="360.0" y="-120.0" type="priority"/>
+    <node id="j4_n" x="480.0" y="120.0" type="priority"/>
+    <node id="j4_s" x="480.0" y="-120.0" type="priority"/>
+</nodes>

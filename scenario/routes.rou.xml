@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Route definitions:
+  - EV vehicle id is ev_0 (required by default runtime arguments)
+  - Edge ids must match scenario/network.net.xml
+-->
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+    <vType id="car" accel="2.0" decel="4.5" sigma="0.5" length="5.0" maxSpeed="13.9" color="0,0,255"/>
+    <vType id="emergency" accel="3.5" decel="4.5" sigma="0.1" length="7.0" maxSpeed="25.0" color="255,0,0"/>
+
+    <!-- EV route along the full horizontal corridor -->
+    <route id="r_main_ev" edges="h_0_1 h_1_2 h_2_3 h_3_4 h_4_5"/>
+
+    <!-- Eastbound candidates from west entry: straight + left/right turn exits -->
+    <route id="r_main_east_straight" edges="h_0_1 h_1_2 h_2_3 h_3_4 h_4_5"/>
+    <route id="r_main_east_right_j1" edges="h_0_1 v_1_to_s"/>
+    <route id="r_main_east_left_j1" edges="h_0_1 v_1_to_n"/>
+    <route id="r_main_east_right_j2" edges="h_0_1 h_1_2 v_2_to_s"/>
+    <route id="r_main_east_left_j2" edges="h_0_1 h_1_2 v_2_to_n"/>
+    <route id="r_main_east_right_j3" edges="h_0_1 h_1_2 h_2_3 v_3_to_s"/>
+    <route id="r_main_east_left_j3" edges="h_0_1 h_1_2 h_2_3 v_3_to_n"/>
+    <route id="r_main_east_right_j4" edges="h_0_1 h_1_2 h_2_3 h_3_4 v_4_to_s"/>
+    <route id="r_main_east_left_j4" edges="h_0_1 h_1_2 h_2_3 h_3_4 v_4_to_n"/>
+    <routeDistribution id="dist_main_east">
+        <route refId="r_main_east_straight" probability="0.45"/>
+        <route refId="r_main_east_right_j1" probability="0.07"/>
+        <route refId="r_main_east_left_j1" probability="0.07"/>
+        <route refId="r_main_east_right_j2" probability="0.08"/>
+        <route refId="r_main_east_left_j2" probability="0.08"/>
+        <route refId="r_main_east_right_j3" probability="0.08"/>
+        <route refId="r_main_east_left_j3" probability="0.08"/>
+        <route refId="r_main_east_right_j4" probability="0.045"/>
+        <route refId="r_main_east_left_j4" probability="0.045"/>
+    </routeDistribution>
+
+    <!-- Westbound candidates from east entry -->
+    <route id="r_main_west_straight" edges="h_5_4 h_4_3 h_3_2 h_2_1 h_1_0"/>
+    <route id="r_main_west_right_j4" edges="h_5_4 v_4_to_n"/>
+    <route id="r_main_west_left_j4" edges="h_5_4 v_4_to_s"/>
+    <route id="r_main_west_right_j3" edges="h_5_4 h_4_3 v_3_to_n"/>
+    <route id="r_main_west_left_j3" edges="h_5_4 h_4_3 v_3_to_s"/>
+    <route id="r_main_west_right_j2" edges="h_5_4 h_4_3 h_3_2 v_2_to_n"/>
+    <route id="r_main_west_left_j2" edges="h_5_4 h_4_3 h_3_2 v_2_to_s"/>
+    <route id="r_main_west_right_j1" edges="h_5_4 h_4_3 h_3_2 h_2_1 v_1_to_n"/>
+    <route id="r_main_west_left_j1" edges="h_5_4 h_4_3 h_3_2 h_2_1 v_1_to_s"/>
+    <routeDistribution id="dist_main_west">
+        <route refId="r_main_west_straight" probability="0.45"/>
+        <route refId="r_main_west_right_j4" probability="0.07"/>
+        <route refId="r_main_west_left_j4" probability="0.07"/>
+        <route refId="r_main_west_right_j3" probability="0.08"/>
+        <route refId="r_main_west_left_j3" probability="0.08"/>
+        <route refId="r_main_west_right_j2" probability="0.08"/>
+        <route refId="r_main_west_left_j2" probability="0.08"/>
+        <route refId="r_main_west_right_j1" probability="0.045"/>
+        <route refId="r_main_west_left_j1" probability="0.045"/>
+    </routeDistribution>
+
+    <!-- Vertical entries with probabilistic turn selection -->
+    <route id="r_j1_ns_straight" edges="v_1_n_s v_1_to_s"/>
+    <route id="r_j1_ns_left" edges="v_1_n_s h_1_2"/>
+    <route id="r_j1_ns_right" edges="v_1_n_s h_1_0"/>
+    <routeDistribution id="dist_j1_ns">
+        <route refId="r_j1_ns_straight" probability="0.5"/>
+        <route refId="r_j1_ns_left" probability="0.25"/>
+        <route refId="r_j1_ns_right" probability="0.25"/>
+    </routeDistribution>
+    <route id="r_j1_sn_straight" edges="v_1_s_n v_1_to_n"/>
+    <route id="r_j1_sn_left" edges="v_1_s_n h_1_0"/>
+    <route id="r_j1_sn_right" edges="v_1_s_n h_1_2"/>
+    <routeDistribution id="dist_j1_sn">
+        <route refId="r_j1_sn_straight" probability="0.5"/>
+        <route refId="r_j1_sn_left" probability="0.25"/>
+        <route refId="r_j1_sn_right" probability="0.25"/>
+    </routeDistribution>
+
+    <route id="r_j2_ns_straight" edges="v_2_n_s v_2_to_s"/>
+    <route id="r_j2_ns_left" edges="v_2_n_s h_2_3"/>
+    <route id="r_j2_ns_right" edges="v_2_n_s h_2_1"/>
+    <routeDistribution id="dist_j2_ns">
+        <route refId="r_j2_ns_straight" probability="0.5"/>
+        <route refId="r_j2_ns_left" probability="0.25"/>
+        <route refId="r_j2_ns_right" probability="0.25"/>
+    </routeDistribution>
+    <route id="r_j2_sn_straight" edges="v_2_s_n v_2_to_n"/>
+    <route id="r_j2_sn_left" edges="v_2_s_n h_2_1"/>
+    <route id="r_j2_sn_right" edges="v_2_s_n h_2_3"/>
+    <routeDistribution id="dist_j2_sn">
+        <route refId="r_j2_sn_straight" probability="0.5"/>
+        <route refId="r_j2_sn_left" probability="0.25"/>
+        <route refId="r_j2_sn_right" probability="0.25"/>
+    </routeDistribution>
+
+    <route id="r_j3_ns_straight" edges="v_3_n_s v_3_to_s"/>
+    <route id="r_j3_ns_left" edges="v_3_n_s h_3_4"/>
+    <route id="r_j3_ns_right" edges="v_3_n_s h_3_2"/>
+    <routeDistribution id="dist_j3_ns">
+        <route refId="r_j3_ns_straight" probability="0.5"/>
+        <route refId="r_j3_ns_left" probability="0.25"/>
+        <route refId="r_j3_ns_right" probability="0.25"/>
+    </routeDistribution>
+    <route id="r_j3_sn_straight" edges="v_3_s_n v_3_to_n"/>
+    <route id="r_j3_sn_left" edges="v_3_s_n h_3_2"/>
+    <route id="r_j3_sn_right" edges="v_3_s_n h_3_4"/>
+    <routeDistribution id="dist_j3_sn">
+        <route refId="r_j3_sn_straight" probability="0.5"/>
+        <route refId="r_j3_sn_left" probability="0.25"/>
+        <route refId="r_j3_sn_right" probability="0.25"/>
+    </routeDistribution>
+
+    <route id="r_j4_ns_straight" edges="v_4_n_s v_4_to_s"/>
+    <route id="r_j4_ns_left" edges="v_4_n_s h_4_5"/>
+    <route id="r_j4_ns_right" edges="v_4_n_s h_4_3"/>
+    <routeDistribution id="dist_j4_ns">
+        <route refId="r_j4_ns_straight" probability="0.5"/>
+        <route refId="r_j4_ns_left" probability="0.25"/>
+        <route refId="r_j4_ns_right" probability="0.25"/>
+    </routeDistribution>
+    <route id="r_j4_sn_straight" edges="v_4_s_n v_4_to_n"/>
+    <route id="r_j4_sn_left" edges="v_4_s_n h_4_3"/>
+    <route id="r_j4_sn_right" edges="v_4_s_n h_4_5"/>
+    <routeDistribution id="dist_j4_sn">
+        <route refId="r_j4_sn_straight" probability="0.5"/>
+        <route refId="r_j4_sn_left" probability="0.25"/>
+        <route refId="r_j4_sn_right" probability="0.25"/>
+    </routeDistribution>
+
+    <!-- Main corridor flows -->
+    <flow id="main_east_flow" type="car" route="dist_main_east" begin="0" end="1000" period="2.2" departLane="best"/>
+    <flow id="main_west_flow" type="car" route="dist_main_west" begin="0" end="1000" period="2.8" departLane="best"/>
+
+    <!-- Vertical traffic flows to force dynamic traffic light switching -->
+    <flow id="j1_ns_flow" type="car" route="dist_j1_ns" begin="0" end="1000" period="4.0" departLane="best"/>
+    <flow id="j1_sn_flow" type="car" route="dist_j1_sn" begin="0" end="1000" period="4.5" departLane="best"/>
+    <flow id="j2_ns_flow" type="car" route="dist_j2_ns" begin="0" end="1000" period="4.2" departLane="best"/>
+    <flow id="j2_sn_flow" type="car" route="dist_j2_sn" begin="0" end="1000" period="4.7" departLane="best"/>
+    <flow id="j3_ns_flow" type="car" route="dist_j3_ns" begin="0" end="1000" period="4.1" departLane="best"/>
+    <flow id="j3_sn_flow" type="car" route="dist_j3_sn" begin="0" end="1000" period="4.9" departLane="best"/>
+    <flow id="j4_ns_flow" type="car" route="dist_j4_ns" begin="0" end="1000" period="4.3" departLane="best"/>
+    <flow id="j4_sn_flow" type="car" route="dist_j4_sn" begin="0" end="1000" period="5.0" departLane="best"/>
+
+    <!-- Ambulance / EV -->
+    <vehicle id="ev_0" type="emergency" route="r_main_ev" depart="20" departLane="best" departSpeed="max"/>
+</routes>

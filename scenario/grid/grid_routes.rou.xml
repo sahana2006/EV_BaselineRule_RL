@@ -1,0 +1,155 @@
+<?xml version="1.0" ?>
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+    <vType id="civilian" vClass="passenger" accel="2.6" decel="4.5" sigma="0.4" length="5.0" minGap="2.5" maxSpeed="13.9" color="0,90,255"/>
+    <vType id="emergency" vClass="emergency" guiShape="emergency" accel="4.0" decel="5.0" sigma="0.1" length="6.5" minGap="1.0" maxSpeed="22.0" speedFactor="1.25" color="255,0,0"/>
+    <route id="west_in_0_straight" edges="A0B0 B0C0 C0D0"/>
+    <route id="west_in_0_turn_a" edges="A0B0 B0B1 B1B2 B2B3"/>
+    <route id="west_in_0_turn_b" edges="A0B0 B0B1 B1A1 A1A0"/>
+    <routeDistribution id="west_in_dist_0">
+        <route refId="west_in_0_straight" probability="0.50"/>
+        <route refId="west_in_0_turn_a" probability="0.25"/>
+        <route refId="west_in_0_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="west_in_flow_0" type="civilian" route="west_in_dist_0" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="west_in_1_straight" edges="A1B1 B1C1 C1D1"/>
+    <route id="west_in_1_turn_a" edges="A1B1 B1B2 B2C2 C2C3"/>
+    <route id="west_in_1_turn_b" edges="A1B1 B1B0"/>
+    <routeDistribution id="west_in_dist_1">
+        <route refId="west_in_1_straight" probability="0.50"/>
+        <route refId="west_in_1_turn_a" probability="0.25"/>
+        <route refId="west_in_1_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="west_in_flow_1" type="civilian" route="west_in_dist_1" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="west_in_2_straight" edges="A2B2 B2C2 C2D2"/>
+    <route id="west_in_2_turn_a" edges="A2B2 B2C2 C2D2 D2D3"/>
+    <route id="west_in_2_turn_b" edges="A2B2 B2B1 B1C1 C1C0"/>
+    <routeDistribution id="west_in_dist_2">
+        <route refId="west_in_2_straight" probability="0.50"/>
+        <route refId="west_in_2_turn_a" probability="0.25"/>
+        <route refId="west_in_2_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="west_in_flow_2" type="civilian" route="west_in_dist_2" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="west_in_3_straight" edges="A3B3 B3C3 C3D3"/>
+    <route id="west_in_3_turn_a" edges="A3B3 B3B2 B2C2 C2D2 D2D3"/>
+    <route id="west_in_3_turn_b" edges="A3B3 B3B2 B2B1 B1C1 C1D1 D1D0"/>
+    <routeDistribution id="west_in_dist_3">
+        <route refId="west_in_3_straight" probability="0.50"/>
+        <route refId="west_in_3_turn_a" probability="0.25"/>
+        <route refId="west_in_3_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="west_in_flow_3" type="civilian" route="west_in_dist_3" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="east_in_0_straight" edges="D0C0 C0B0 B0A0"/>
+    <route id="east_in_0_turn_a" edges="D0C0 C0C1 C1B1 B1B0"/>
+    <route id="east_in_0_turn_b" edges="D0C0 C0B0 B0B1 B1A1 A1A2 A2A3"/>
+    <routeDistribution id="east_in_dist_0">
+        <route refId="east_in_0_straight" probability="0.50"/>
+        <route refId="east_in_0_turn_a" probability="0.25"/>
+        <route refId="east_in_0_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="east_in_flow_0" type="civilian" route="east_in_dist_0" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="east_in_1_straight" edges="D1C1 C1B1 B1A1"/>
+    <route id="east_in_1_turn_a" edges="D1C1 C1C0"/>
+    <route id="east_in_1_turn_b" edges="D1C1 C1B1 B1B2 B2B3"/>
+    <routeDistribution id="east_in_dist_1">
+        <route refId="east_in_1_straight" probability="0.50"/>
+        <route refId="east_in_1_turn_a" probability="0.25"/>
+        <route refId="east_in_1_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="east_in_flow_1" type="civilian" route="east_in_dist_1" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="east_in_2_straight" edges="D2C2 C2B2 B2A2"/>
+    <route id="east_in_2_turn_a" edges="D2C2 C2C1 C1D1 D1D0"/>
+    <route id="east_in_2_turn_b" edges="D2C2 C2C3"/>
+    <routeDistribution id="east_in_dist_2">
+        <route refId="east_in_2_straight" probability="0.50"/>
+        <route refId="east_in_2_turn_a" probability="0.25"/>
+        <route refId="east_in_2_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="east_in_flow_2" type="civilian" route="east_in_dist_2" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="east_in_3_straight" edges="D3C3 C3B3 B3A3"/>
+    <route id="east_in_3_turn_a" edges="D3C3 C3C2 C2C1 C1D1 D1D0"/>
+    <route id="east_in_3_turn_b" edges="D3C3 C3C2 C2D2 D2D3"/>
+    <routeDistribution id="east_in_dist_3">
+        <route refId="east_in_3_straight" probability="0.50"/>
+        <route refId="east_in_3_turn_a" probability="0.25"/>
+        <route refId="east_in_3_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="east_in_flow_3" type="civilian" route="east_in_dist_3" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="south_in_0_straight" edges="A0A1 A1A2 A2A3"/>
+    <route id="south_in_0_turn_a" edges="A0A1 A1B1 B1C1 C1D1"/>
+    <route id="south_in_0_turn_b" edges="A0A1 A1B1 B1B0 B0A0"/>
+    <routeDistribution id="south_in_dist_0">
+        <route refId="south_in_0_straight" probability="0.50"/>
+        <route refId="south_in_0_turn_a" probability="0.25"/>
+        <route refId="south_in_0_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="south_in_flow_0" type="civilian" route="south_in_dist_0" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="south_in_1_straight" edges="B0B1 B1B2 B2B3"/>
+    <route id="south_in_1_turn_a" edges="B0B1 B1B2 B2C2 C2D2"/>
+    <route id="south_in_1_turn_b" edges="B0B1 B1A1"/>
+    <routeDistribution id="south_in_dist_1">
+        <route refId="south_in_1_straight" probability="0.50"/>
+        <route refId="south_in_1_turn_a" probability="0.25"/>
+        <route refId="south_in_1_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="south_in_flow_1" type="civilian" route="south_in_dist_1" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="south_in_2_straight" edges="C0C1 C1C2 C2C3"/>
+    <route id="south_in_2_turn_a" edges="C0C1 C1C2 C2C3 C3D3"/>
+    <route id="south_in_2_turn_b" edges="C0C1 C1B1 B1B2 B2A2"/>
+    <routeDistribution id="south_in_dist_2">
+        <route refId="south_in_2_straight" probability="0.50"/>
+        <route refId="south_in_2_turn_a" probability="0.25"/>
+        <route refId="south_in_2_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="south_in_flow_2" type="civilian" route="south_in_dist_2" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="south_in_3_straight" edges="D0D1 D1D2 D2D3"/>
+    <route id="south_in_3_turn_a" edges="D0D1 D1C1 C1C2 C2C3 C3D3"/>
+    <route id="south_in_3_turn_b" edges="D0D1 D1C1 C1B1 B1B2 B2B3 B3A3"/>
+    <routeDistribution id="south_in_dist_3">
+        <route refId="south_in_3_straight" probability="0.50"/>
+        <route refId="south_in_3_turn_a" probability="0.25"/>
+        <route refId="south_in_3_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="south_in_flow_3" type="civilian" route="south_in_dist_3" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="north_in_0_straight" edges="A3A2 A2A1 A1A0"/>
+    <route id="north_in_0_turn_a" edges="A3A2 A2B2 B2B1 B1A1"/>
+    <route id="north_in_0_turn_b" edges="A3A2 A2A1 A1B1 B1B0 B0C0 C0D0"/>
+    <routeDistribution id="north_in_dist_0">
+        <route refId="north_in_0_straight" probability="0.50"/>
+        <route refId="north_in_0_turn_a" probability="0.25"/>
+        <route refId="north_in_0_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="north_in_flow_0" type="civilian" route="north_in_dist_0" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="north_in_1_straight" edges="B3B2 B2B1 B1B0"/>
+    <route id="north_in_1_turn_a" edges="B3B2 B2A2"/>
+    <route id="north_in_1_turn_b" edges="B3B2 B2B1 B1C1 C1D1"/>
+    <routeDistribution id="north_in_dist_1">
+        <route refId="north_in_1_straight" probability="0.50"/>
+        <route refId="north_in_1_turn_a" probability="0.25"/>
+        <route refId="north_in_1_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="north_in_flow_1" type="civilian" route="north_in_dist_1" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="north_in_2_straight" edges="C3C2 C2C1 C1C0"/>
+    <route id="north_in_2_turn_a" edges="C3C2 C2B2 B2B3 B3A3"/>
+    <route id="north_in_2_turn_b" edges="C3C2 C2D2"/>
+    <routeDistribution id="north_in_dist_2">
+        <route refId="north_in_2_straight" probability="0.50"/>
+        <route refId="north_in_2_turn_a" probability="0.25"/>
+        <route refId="north_in_2_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="north_in_flow_2" type="civilian" route="north_in_dist_2" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="north_in_3_straight" edges="D3D2 D2D1 D1D0"/>
+    <route id="north_in_3_turn_a" edges="D3D2 D2C2 C2B2 B2B3 B3A3"/>
+    <route id="north_in_3_turn_b" edges="D3D2 D2C2 C2C3 C3D3"/>
+    <routeDistribution id="north_in_dist_3">
+        <route refId="north_in_3_straight" probability="0.50"/>
+        <route refId="north_in_3_turn_a" probability="0.25"/>
+        <route refId="north_in_3_turn_b" probability="0.25"/>
+    </routeDistribution>
+    <flow id="north_in_flow_3" type="civilian" route="north_in_dist_3" begin="0" end="3600" vehsPerHour="240" departLane="best" departSpeed="max"/>
+    <route id="ev_route_horizontal" edges="A1B1 B1C1 C1D1"/>
+    <vehicle id="ev_0" type="emergency" route="ev_route_horizontal" depart="20" departLane="best" departSpeed="max"/>
+    <route id="ev_route_vertical" edges="C0C1 C1C2 C2C3"/>
+    <vehicle id="ev_1" type="emergency" route="ev_route_vertical" depart="80" departLane="best" departSpeed="max"/>
+    <route id="ev_route_mixed" edges="A0B0 B0B1 B1B2 B2C2 C2D2 D2D3"/>
+    <vehicle id="ev_2" type="emergency" route="ev_route_mixed" depart="140" departLane="best" departSpeed="max"/>
+</routes>

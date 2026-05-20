@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<edges xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/edges_file.xsd">
+    <!-- Horizontal arterial (both directions) -->
+    <edge id="h_0_1" from="w0" to="j1" priority="2" numLanes="2" speed="16.7"/>
+    <edge id="h_1_0" from="j1" to="w0" priority="2" numLanes="2" speed="16.7"/>
+    <edge id="h_1_2" from="j1" to="j2" priority="2" numLanes="2" speed="16.7"/>
+    <edge id="h_2_1" from="j2" to="j1" priority="2" numLanes="2" speed="16.7"/>
+    <edge id="h_2_3" from="j2" to="j3" priority="2" numLanes="2" speed="16.7"/>
+    <edge id="h_3_2" from="j3" to="j2" priority="2" numLanes="2" speed="16.7"/>
+    <edge id="h_3_4" from="j3" to="j4" priority="2" numLanes="2" speed="16.7"/>
+    <edge id="h_4_3" from="j4" to="j3" priority="2" numLanes="2" speed="16.7"/>
+    <edge id="h_4_5" from="j4" to="e0" priority="2" numLanes="2" speed="16.7"/>
+    <edge id="h_5_4" from="e0" to="j4" priority="2" numLanes="2" speed="16.7"/>
+
+    <!-- Vertical crossing roads for each intersection -->
+    <edge id="v_1_n_s" from="j1_n" to="j1" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_1_s_n" from="j1_s" to="j1" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_1_to_n" from="j1" to="j1_n" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_1_to_s" from="j1" to="j1_s" priority="1" numLanes="1" speed="13.9"/>
+
+    <edge id="v_2_n_s" from="j2_n" to="j2" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_2_s_n" from="j2_s" to="j2" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_2_to_n" from="j2" to="j2_n" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_2_to_s" from="j2" to="j2_s" priority="1" numLanes="1" speed="13.9"/>
+
+    <edge id="v_3_n_s" from="j3_n" to="j3" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_3_s_n" from="j3_s" to="j3" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_3_to_n" from="j3" to="j3_n" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_3_to_s" from="j3" to="j3_s" priority="1" numLanes="1" speed="13.9"/>
+
+    <edge id="v_4_n_s" from="j4_n" to="j4" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_4_s_n" from="j4_s" to="j4" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_4_to_n" from="j4" to="j4_n" priority="1" numLanes="1" speed="13.9"/>
+    <edge id="v_4_to_s" from="j4" to="j4_s" priority="1" numLanes="1" speed="13.9"/>
+</edges>

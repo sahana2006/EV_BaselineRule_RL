@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<viewsettings>
+    <!-- Wide startup view so the full network is visible immediately -->
+    <viewport zoom="110" x="300" y="120"/>
+    <scheme name="real world"/>
+    <delay value="20"/>
+</viewsettings>

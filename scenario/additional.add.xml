@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Optional SUMO additions:
+  - traffic light overrides
+  - induction loop / e1/e2 detectors
+  - custom rerouters
+-->
+<additional xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/additional_file.xsd">
+    <!-- Keep empty by default. Add detectors/signals as needed. -->
+</additional>
