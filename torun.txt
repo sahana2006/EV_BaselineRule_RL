@@ -25,3 +25,13 @@ To Train with episode number: python src/train_rl.py --sumocfg scenario/simulati
 To run full-based: python src/main.py --sumocfg scenario/grid/grid.sumocfg
 To run with RL: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt
 Train DL: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --episodes 20 --max-steps 300
+
+Rule Based on different EVs:
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --ev-id ev_0
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --ev-id ev_1
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --ev-id ev_2
+
+
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt --ev-id ev_0
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt --ev-id ev_1
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt --ev-id ev_2
