@@ -29,13 +29,44 @@ ACTIONS: Dict[int, str] = {
 ACTION_DIM = len(ACTIONS)
 
 
-def compute_reward(metrics: Dict[str, Any], queue_weight: float = 0.5, stop_weight: float = 2.0) -> float:
-    """Shaped reward from per-step metrics (see TrafficEnv.step for metric keys)."""
-    return (
-        -float(metrics["ev_waiting_time"])
-        - queue_weight * float(metrics["queue_length"])
-        - stop_weight * float(metrics["ev_stops"])
-    )
+REWARD_WEIGHTS: Dict[str, float] = {
+    # Penalize step-wise growth in EV waiting time so the agent prefers faster passage.
+    "ev_delay": 2.0,
+    # Heavily penalize new stop events because a full stop is especially bad for an EV.
+    "ev_stop": 8.0,
+    # Penalize crawling speed near the controlled intersection to encourage smooth crossing.
+    "low_speed_near_signal": 3.0,
+    # Penalize congestion at the controlled and surrounding intersections.
+    "queue": 0.12,
+    # Penalize queue growth so the agent reacts before congestion snowballs.
+    "queue_growth": 0.18,
+    # Reward throughput so the policy does not optimize only the EV at the city's expense.
+    "throughput": 0.75,
+    # Penalize switching phases too often to reduce oscillatory signal control.
+    "switch": 0.35,
+    # Give a small bonus when the EV clears an intersection.
+    "intersection_clear": 2.0,
+}
+
+LOW_SPEED_NEAR_SIGNAL_THRESHOLD = 3.0
+NEAR_SIGNAL_DISTANCE_THRESHOLD = 60.0
+
+
+def compute_reward(metrics: Dict[str, Any], weights: Dict[str, float] | None = None) -> tuple[float, Dict[str, float]]:
+    """Return total reward plus a readable per-component breakdown."""
+    w = REWARD_WEIGHTS if weights is None else weights
+    components = {
+        "ev_delay_penalty": -w["ev_delay"] * float(metrics["ev_waiting_time"]),
+        "ev_stop_penalty": -w["ev_stop"] * float(metrics["ev_stops"]),
+        "low_speed_penalty": -w["low_speed_near_signal"] * float(metrics["low_speed_near_signal"]),
+        "queue_penalty": -w["queue"] * float(metrics["queue_length"]),
+        "queue_growth_penalty": -w["queue_growth"] * float(metrics["queue_growth"]),
+        "throughput_reward": w["throughput"] * float(metrics["throughput"]),
+        "switch_penalty": -w["switch"] * float(metrics["signal_switch"]),
+        "intersection_clear_reward": w["intersection_clear"] * float(metrics["intersection_clear"]),
+    }
+    total = float(sum(components.values()))
+    return total, components
 
 
 def _project_root() -> Path:
@@ -98,9 +129,12 @@ class TrafficEnv:
         self._episode_steps = 0
         self._prev_ev_wait = 0.0
         self._prev_ev_stopped = False
+        self._prev_network_queue = 0
+        self._prev_phase_idx: Optional[int] = None
         self._focus_tl: Optional[str] = None
         self._started = False
         self._state_debug_counter = 0
+        self._reward_debug_counter = 0
 
     def _close(self) -> None:
         if not self._started:
@@ -310,12 +344,21 @@ class TrafficEnv:
         self._episode_steps = 0
         self._prev_ev_wait = traci.vehicle.getWaitingTime(self.ev_id)
         self._prev_ev_stopped = traci.vehicle.getSpeed(self.ev_id) < STOP_SPEED_THRESHOLD
+        self._prev_network_queue = self._queue_length_network()
         focus_signal = self._nearest_signal_ahead()
         self._focus_tl = focus_signal.tl_id if focus_signal else None
+        self._prev_phase_idx = traci.trafficlight.getPhase(self._focus_tl) if self._focus_tl else None
         self._state_debug_counter = 0
+        self._reward_debug_counter = 0
         state = self.get_state()
         print(f"[RL_STATE] state_dim={self.state_dim}")
         print(f"[RL_STATE] example_state={state.tolist()}")
+        print(
+            "[RL_REWARD] formula="
+            " -ev_delay*2.0 -ev_stop*8.0 -low_speed_near_signal*3.0 "
+            "-queue*0.12 -queue_growth*0.18 +throughput*0.75 -switch*0.35 +intersection_clear*2.0"
+        )
+        print(f"[RL_REWARD] weights={REWARD_WEIGHTS}")
         return state
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
@@ -325,14 +368,21 @@ class TrafficEnv:
         done = False
         info: Dict[str, Any] = {}
         clear_bonus = 0.0
+        switch_event = 0.0
 
         if self.ev_id in traci.vehicle.getIDList():
             focus_signal = self._nearest_signal_ahead()
             self._focus_tl = focus_signal.tl_id if focus_signal else None
             if focus_signal is not None:
+                current_phase = traci.trafficlight.getPhase(focus_signal.tl_id)
+                if self._prev_phase_idx is not None and current_phase != self._prev_phase_idx:
+                    switch_event = 1.0
                 dist = signal_distance(self.ev_id, focus_signal)
                 ev_phase = infer_ev_green_phase(focus_signal.tl_id, list(focus_signal.route_lanes))
                 apply_discrete_rl_action(focus_signal.tl_id, int(action), ev_phase, dist)
+                self._prev_phase_idx = traci.trafficlight.getPhase(focus_signal.tl_id)
+            else:
+                self._prev_phase_idx = None
 
         try:
             traci.simulationStep()
@@ -359,12 +409,43 @@ class TrafficEnv:
         self._prev_ev_stopped = ev_stopped if ev_present else False
 
         queue_len = self._queue_length_network()
+        queue_growth = max(0.0, float(queue_len - self._prev_network_queue))
+        self._prev_network_queue = queue_len
+
+        throughput = float(traci.simulation.getArrivedNumber())
+        low_speed_near_signal = 0.0
+        if ev_present and self._focus_tl is not None:
+            focus_signal = next((signal for signal in self._route_signals if signal.tl_id == self._focus_tl), None)
+            if focus_signal is not None:
+                dist_to_signal = signal_distance(self.ev_id, focus_signal)
+                if dist_to_signal <= NEAR_SIGNAL_DISTANCE_THRESHOLD and speed < LOW_SPEED_NEAR_SIGNAL_THRESHOLD:
+                    low_speed_near_signal = (LOW_SPEED_NEAR_SIGNAL_THRESHOLD - speed) / LOW_SPEED_NEAR_SIGNAL_THRESHOLD
+
         metrics = {
             "ev_waiting_time": delta_wait,
             "queue_length": float(queue_len),
+            "queue_growth": queue_growth,
             "ev_stops": stop_event,
+            "low_speed_near_signal": low_speed_near_signal,
+            "throughput": throughput,
+            "signal_switch": switch_event,
+            "intersection_clear": clear_bonus / max(self.intersection_clear_bonus, 1e-6),
         }
-        reward = compute_reward(metrics) + clear_bonus
+        reward, breakdown = compute_reward(metrics)
+        self._reward_debug_counter += 1
+        if self._reward_debug_counter <= 8 or self._reward_debug_counter % 25 == 0:
+            print(
+                "[RL_REWARD] "
+                f"delay={breakdown['ev_delay_penalty']:.3f} "
+                f"stop={breakdown['ev_stop_penalty']:.3f} "
+                f"low_speed={breakdown['low_speed_penalty']:.3f} "
+                f"queue={breakdown['queue_penalty']:.3f} "
+                f"queue_growth={breakdown['queue_growth_penalty']:.3f} "
+                f"throughput={breakdown['throughput_reward']:.3f} "
+                f"switch={breakdown['switch_penalty']:.3f} "
+                f"clear={breakdown['intersection_clear_reward']:.3f} "
+                f"total={reward:.3f}"
+            )
 
         if not ev_present:
             done = True

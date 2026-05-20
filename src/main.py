@@ -153,6 +153,20 @@ def run_rl_scenario(config: SimulationConfig, model_path: str, csv_name: str) ->
             if config.ev_id in traci.vehicle.getIDList():
                 colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
                 metrics.capture(config.ev_id)
+
+        if config.ev_id not in traci.vehicle.getIDList():
+            post_ev_steps = int(config.post_ev_buffer_seconds / max(config.step_length, 0.1))
+            print(f"[INFO] EV left network in RL mode. Keeping simulation for {config.post_ev_buffer_seconds}s more.")
+            for _ in range(post_ev_steps):
+                try:
+                    traci.simulationStep()
+                except traci_exceptions.FatalTraCIError as err:
+                    print(f"[WARN] SUMO closed connection during RL post-EV buffer: {err}")
+                    break
+                colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
+                if traci.simulation.getMinExpectedNumber() == 0:
+                    print("[WARN] No vehicles are running (minExpected=0). Ending RL scenario safely.")
+                    break
     finally:
         env.close()
 
