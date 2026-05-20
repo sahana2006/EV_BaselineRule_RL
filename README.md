@@ -10,16 +10,7 @@ SUMO + TraCI project for emergency vehicle priority on a reusable `4x4` urban tr
 - Generates plots, CSV metrics, logs, and trained RL checkpoints under `outputs/`.
 
 ## Setup
-
-1. Install SUMO: https://sumo.dlr.de/docs/Downloads.php
-2. Set `SUMO_HOME` in PowerShell:
-
-```powershell
-setx SUMO_HOME "C:\Program Files (x86)\Eclipse\Sumo"
-```
-
-3. Reopen the terminal.
-4. Install Python dependencies:
+1. Install Python dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -31,12 +22,6 @@ The project now works primarily on the generated `4x4` grid scenario:
 
 ```bash
 python scenario/grid/generate_grid.py
-```
-
-Optional custom generation:
-
-```bash
-python scenario/grid/generate_grid.py --density 1.25 --seed 7 --duration 5400
 ```
 
 ## Main Run Commands
@@ -53,22 +38,10 @@ Run rule-based controller:
 python src/main.py --sumocfg scenario/grid/grid.sumocfg
 ```
 
-Run headless:
-
-```bash
-python src/main.py --sumocfg scenario/grid/grid.sumocfg --headless
-```
-
 Run RL model:
 
 ```bash
 python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt
-```
-
-Run RL model headless:
-
-```bash
-python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt --headless
 ```
 
 Train RL:
@@ -95,9 +68,3 @@ You can also edit the EV route in `scenario/grid/grid_routes.rou.xml` and rerun 
 - RL mode now keeps the simulation alive briefly after the EV exits, just like the rule-based mode.
 - The current controller is route-aware and works for horizontal, vertical, and turning EV paths on the grid.
 - If you change the reward function or state representation, retrain the RL model before evaluating it.
-
-## Common Errors
-
-- `SUMO_HOME is not set`: set it and reopen the terminal.
-- `SUMO config not found`: run from the project root or pass the correct `--sumocfg`.
-- `Vehicle 'ev_0' is not known`: regenerate the grid or check the route file.
