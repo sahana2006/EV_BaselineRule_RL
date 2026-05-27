@@ -13,7 +13,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.config import SimulationConfig
 from src.dqn_agent import DQNAgent
-from src.rl_env import ACTION_DIM, TrafficEnv
+from src.rl_env import (
+    ACTION_DIM,
+    CONTROLLER_COORDINATED_MARL,
+    CONTROLLER_INDEPENDENT_MARL,
+    CONTROLLER_SINGLE_AGENT,
+    TrafficEnv,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,11 +35,25 @@ def parse_args() -> argparse.Namespace:
         default=str(PROJECT_ROOT / "outputs" / "logs" / "rl_training_rewards.csv"),
         help="Append episode total reward",
     )
+    p.add_argument(
+        "--controller-type",
+        choices=[CONTROLLER_SINGLE_AGENT, CONTROLLER_INDEPENDENT_MARL, CONTROLLER_COORDINATED_MARL, "multi_agent"],
+        default=CONTROLLER_COORDINATED_MARL,
+        help="Train single-agent RL, independent MARL, or coordinated MARL",
+    )
+    p.add_argument(
+        "--traffic-scale",
+        type=float,
+        default=1.0,
+        help="SUMO demand scaling for moderate/heavy traffic experiments",
+    )
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.controller_type == "multi_agent":
+        args.controller_type = CONTROLLER_INDEPENDENT_MARL
     cfg = SimulationConfig(
         sumo_config=args.sumocfg,
         use_gui=False,
@@ -44,7 +64,13 @@ def main() -> None:
         plot_dir=PROJECT_ROOT / "outputs" / "plots",
         csv_dir=PROJECT_ROOT / "outputs" / "csv",
     )
-    env = TrafficEnv(cfg, headless=True, max_episode_steps=args.max_steps)
+    env = TrafficEnv(
+        cfg,
+        headless=True,
+        max_episode_steps=args.max_steps,
+        controller_type=args.controller_type,
+        traffic_scale=args.traffic_scale,
+    )
     agent = DQNAgent(state_dim=env.state_dim, action_dim=ACTION_DIM)
 
     log_path = Path(args.reward_log)
@@ -53,7 +79,7 @@ def main() -> None:
     with log_path.open("a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if new_file:
-            writer.writerow(["episode", "total_reward", "steps", "epsilon", "loss_last"])
+            writer.writerow(["episode", "controller_type", "traffic_scale", "total_reward", "steps", "epsilon", "loss_last"])
 
     for ep in range(args.episodes):
         state = env.reset()
@@ -62,24 +88,54 @@ def main() -> None:
         steps = 0
         last_loss: float | None = None
         while not done:
-            action = agent.choose_action(state, greedy=False)
-            next_state, reward, done, _ = env.step(action)
-            agent.store_transition(state, action, reward, next_state, done)
-            if steps % args.learn_every == 0:
-                loss = agent.learn()
-                if loss is not None:
-                    last_loss = loss
-            state = next_state
-            total_r += reward
+            if args.controller_type in {CONTROLLER_INDEPENDENT_MARL, CONTROLLER_COORDINATED_MARL}:
+                if not isinstance(state, dict):
+                    raise TypeError("Multi-agent training expected a dictionary of states.")
+                actions = agent.choose_actions(state, greedy=False)
+                next_state, rewards, done, _ = env.step(actions)
+                if not isinstance(next_state, dict) or not isinstance(rewards, dict):
+                    raise TypeError("Multi-agent environment returned unexpected types.")
+                agent.store_multi_agent_transition(state, actions, rewards, next_state, done)
+                if steps % args.learn_every == 0:
+                    loss = agent.learn()
+                    if loss is not None:
+                        last_loss = loss
+                state = next_state
+                total_r += float(sum(rewards.values()))
+            else:
+                if isinstance(state, dict):
+                    raise TypeError("Single-agent training expected a single state vector.")
+                action = agent.choose_action(state, greedy=False)
+                next_state, reward, done, _ = env.step(action)
+                if isinstance(next_state, dict) or isinstance(reward, dict):
+                    raise TypeError("Single-agent environment returned unexpected types.")
+                agent.store_transition(state, action, reward, next_state, done)
+                if steps % args.learn_every == 0:
+                    loss = agent.learn()
+                    if loss is not None:
+                        last_loss = loss
+                state = next_state
+                total_r += reward
             steps += 1
 
         agent.decay_epsilon()
         agent.save(args.model_out)
         with log_path.open("a", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(
-                [ep + 1, f"{total_r:.4f}", steps, f"{agent.epsilon:.4f}", "" if last_loss is None else f"{last_loss:.6f}"]
+                [
+                    ep + 1,
+                    args.controller_type,
+                    f"{args.traffic_scale:.2f}",
+                    f"{total_r:.4f}",
+                    steps,
+                    f"{agent.epsilon:.4f}",
+                    "" if last_loss is None else f"{last_loss:.6f}",
+                ]
             )
-        print(f"episode {ep + 1}/{args.episodes} reward={total_r:.2f} steps={steps} eps={agent.epsilon:.3f} saved={args.model_out}")
+        print(
+            f"episode {ep + 1}/{args.episodes} controller={args.controller_type} traffic_scale={args.traffic_scale:.2f} "
+            f"reward={total_r:.2f} steps={steps} eps={agent.epsilon:.3f} saved={args.model_out}"
+        )
 
     env.close()
     print("Training finished.")

@@ -18,10 +18,6 @@ Run with RL: python src/main.py --sumocfg scenario/simulation.sumocfg --mode rl_
 To Train with episode number: python src/train_rl.py --sumocfg scenario/simulation.sumocfg --episodes 500
 
 
-
-
-
-
 To run full-based: python src/main.py --sumocfg scenario/grid/grid.sumocfg
 To run with RL: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt
 Train DL: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --episodes 20 --max-steps 300
@@ -31,7 +27,24 @@ python src/main.py --sumocfg scenario/grid/grid.sumocfg --ev-id ev_0
 python src/main.py --sumocfg scenario/grid/grid.sumocfg --ev-id ev_1
 python src/main.py --sumocfg scenario/grid/grid.sumocfg --ev-id ev_2
 
-
 python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt --ev-id ev_0
 python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt --ev-id ev_1
 python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt --ev-id ev_2
+
+
+# Multi agent 
+python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type single_agent --model-out outputs/models/dqn.pt --ev-id ev_2
+python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type independent_marl --model-out outputs/models/dqn_marl.pt --ev-id ev_2
+python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type coordinated_marl --model-out outputs/models/dqn_coord_marl.pt --ev-id ev_2
+
+To train Under heavy traffic:
+python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type coordinated_marl --model-out outputs/models/dqn_coord_marl.pt --ev-id ev_2 --traffic-scale 1.6
+
+
+To Run:
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-path outputs/models/dqn.pt --ev-id ev_2
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode independent_marl_model --independent-marl-model-path outputs/models/dqn_marl.pt --ev-id ev_2
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode coordinated_marl_model --coordinated-marl-model-path outputs/models/dqn_coord_marl.pt --ev-id ev_2
+
+Compare
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --compare-all --compare-runs 5 --traffic-scale 1.6 --model-path outputs/models/dqn.pt --independent-marl-model-path outputs/models/dqn_marl.pt --coordinated-marl-model-path outputs/models/dqn_coord_marl.pt --ev-id ev_2

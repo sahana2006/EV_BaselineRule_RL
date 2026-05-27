@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from collections import deque
 from pathlib import Path
-from typing import Deque, List, Tuple
+from typing import Deque, Dict, Iterable, Tuple
 
 import numpy as np
 import torch
@@ -27,6 +27,8 @@ class QNetwork(nn.Module):
 
 
 class DQNAgent:
+    """A single shared DQN that can be reused by one or many traffic-light agents."""
+
     def __init__(
         self,
         state_dim: int,
@@ -75,6 +77,26 @@ class DQNAgent:
         """Greedy policy for evaluation."""
         return self.choose_action(state, greedy=True)
 
+    def choose_actions(self, states: Dict[str, np.ndarray], greedy: bool = False) -> Dict[str, int]:
+        """
+        Shared-policy multi-agent action selection.
+
+        Each intersection contributes its own local state, but all of them reuse
+        the same policy network weights.
+        """
+        if not states:
+            return {}
+        if not greedy and random.random() < self.epsilon:
+            return {agent_id: random.randrange(self.action_dim) for agent_id in states}
+
+        agent_ids = list(states.keys())
+        batch = np.stack([states[agent_id] for agent_id in agent_ids])
+        with torch.no_grad():
+            t = torch.as_tensor(batch, dtype=torch.float32, device=self.device)
+            q = self.policy_net(t)
+            best_actions = q.argmax(dim=1).tolist()
+        return {agent_id: int(best_actions[idx]) for idx, agent_id in enumerate(agent_ids)}
+
     def store_transition(
         self,
         state: np.ndarray,
@@ -84,6 +106,26 @@ class DQNAgent:
         done: bool,
     ) -> None:
         self.memory.append((state, action, reward, next_state, done))
+
+    def store_transitions(
+        self,
+        transitions: Iterable[Tuple[np.ndarray, int, float, np.ndarray, bool]],
+    ) -> None:
+        for transition in transitions:
+            self.memory.append(transition)
+
+    def store_multi_agent_transition(
+        self,
+        states: Dict[str, np.ndarray],
+        actions: Dict[str, int],
+        rewards: Dict[str, float],
+        next_states: Dict[str, np.ndarray],
+        done: bool,
+    ) -> None:
+        for agent_id, state in states.items():
+            if agent_id not in actions or agent_id not in rewards or agent_id not in next_states:
+                continue
+            self.memory.append((state, int(actions[agent_id]), float(rewards[agent_id]), next_states[agent_id], done))
 
     def learn(self) -> float | None:
         if len(self.memory) < self.batch_size:
@@ -129,6 +171,7 @@ class DQNAgent:
                 "learn_steps": self.learn_steps,
                 "state_dim": self.state_dim,
                 "action_dim": self.action_dim,
+                "shared_policy": True,
             },
             path,
         )
