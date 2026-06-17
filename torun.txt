@@ -36,6 +36,7 @@ python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-
 python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type single_agent --model-out outputs/models/dqn.pt --ev-id ev_2
 python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type independent_marl --model-out outputs/models/dqn_marl.pt --ev-id ev_2
 python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type coordinated_marl --model-out outputs/models/dqn_coord_marl.pt --ev-id ev_2
+python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type coordinated_dueling_dqn --episodes 50 --model-out outputs/models/coord_dueling_dqn.pt --reward-log outputs/logs/coord_dueling_dqn_training.csv --ev-id ev_2
 
 To train Under heavy traffic:
 python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type coordinated_marl --model-out outputs/models/dqn_coord_marl.pt --ev-id ev_2 --traffic-scale 1.6
@@ -46,5 +47,17 @@ python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode rl_model --model-
 python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode independent_marl_model --independent-marl-model-path outputs/models/dqn_marl.pt --ev-id ev_2
 python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode coordinated_marl_model --coordinated-marl-model-path outputs/models/dqn_coord_marl.pt --ev-id ev_2
 
+
+python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type coordinated_dueling_dqn --model-out outputs/models/coord_dueling_dqn.pt --reward-log outputs/logs/coord_dueling_dqn_training.csv --ev-id ev_2
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode coordinated_dueling_dqn --coord-dueling-model-path outputs/models/coord_dueling_dqn.pt --ev-id ev_2
+
 Compare
 python src/main.py --sumocfg scenario/grid/grid.sumocfg --compare-all --compare-runs 5 --traffic-scale 1.6 --model-path outputs/models/dqn.pt --independent-marl-model-path outputs/models/dqn_marl.pt --coordinated-marl-model-path outputs/models/dqn_coord_marl.pt --ev-id ev_2
+
+Global PPO
+train: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type global_ppo --ev-id ev_2 --episodes 200 --max-steps 3600
+test: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode global_ppo --ppo-model-path outputs/models/global_ppo.pt --ev-id ev_2 
+
+Co ordinated PPO
+train: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type coordinated_ppo --ev-id ev_2 --episodes 200 --max-steps 3600
+test: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode coordinated_ppo --coordinated-ppo-model-path outputs/models/coordinated_ppo.pt --ev-id ev_2

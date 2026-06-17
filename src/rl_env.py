@@ -24,6 +24,8 @@ ACTIONS: Dict[int, str] = {
 ACTION_DIM = len(ACTIONS)
 
 CONTROLLER_SINGLE_AGENT = "single_agent"
+CONTROLLER_GLOBAL_PPO = "global_ppo"
+CONTROLLER_COORDINATED_PPO = "coordinated_ppo"
 CONTROLLER_INDEPENDENT_MARL = "independent_marl"
 CONTROLLER_COORDINATED_MARL = "coordinated_marl"
 CONTROLLER_MULTI_AGENT = CONTROLLER_INDEPENDENT_MARL
@@ -32,19 +34,19 @@ BASE_STATE_DIM = 10
 COORDINATED_STATE_DIM = 15
 
 REWARD_WEIGHTS: Dict[str, float] = {
-    "ev_delay": 2.4,
-    "ev_stop": 9.0,
-    "low_speed_near_signal": 3.2,
-    "queue": 0.14,
-    "queue_growth": 0.22,
-    "throughput": 0.85,
+    "ev_delay": 1.92,
+    "ev_stop": 7.2,
+    "low_speed_near_signal": 2.56,
+    "queue": 0.28,
+    "queue_growth": 0.44,
+    "throughput": 1.275,
     "switch": 0.35,
-    "intersection_clear": 2.0,
-    "neighbor_congestion": 0.10,
-    "network_congestion": 0.16,
+    "intersection_clear": 3.0,
+    "neighbor_congestion": 0.20,
+    "network_congestion": 0.32,
     "corridor_flow": 0.40,
-    "downstream_blockage": 0.18,
-    "traffic_stability": 0.16,
+    "downstream_blockage": 0.36,
+    "traffic_stability": 0.24,
 }
 
 LOW_SPEED_NEAR_SIGNAL_THRESHOLD = 3.0
@@ -71,6 +73,14 @@ def compute_reward(metrics: Dict[str, Any], weights: Dict[str, float] | None = N
         "downstream_blockage_penalty": -w["downstream_blockage"] * float(metrics["downstream_blockage"]),
         "traffic_stability_penalty": -w["traffic_stability"] * float(metrics["traffic_stability"]),
     }
+    anti_gridlock_penalty = 0.0
+    network_congestion = float(metrics["network_congestion"])
+    queue_length = float(metrics["queue_length"])
+    if network_congestion > 0.30:
+        anti_gridlock_penalty -= min(2.0, (network_congestion - 0.30) * 8.0)
+    if queue_length > 20.0:
+        anti_gridlock_penalty -= min(2.0, (queue_length - 20.0) * 0.05)
+    components["anti_gridlock_penalty"] = anti_gridlock_penalty
     total = float(sum(components.values()))
     return total, components
 
@@ -183,6 +193,7 @@ class TrafficEnv:
         self._prev_agent_phases: Dict[str, int] = {}
         self._last_reward_breakdowns: Dict[str, Dict[str, float]] = {}
         self._last_coordination_terms: Dict[str, Dict[str, float]] = {}
+        self._reward_weights_logged = False
 
     def _close(self) -> None:
         if not self._started:
@@ -262,11 +273,11 @@ class TrafficEnv:
 
     @property
     def is_multi_agent(self) -> bool:
-        return self.controller_type in {CONTROLLER_INDEPENDENT_MARL, CONTROLLER_COORDINATED_MARL}
+        return self.controller_type in {CONTROLLER_INDEPENDENT_MARL, CONTROLLER_COORDINATED_MARL, CONTROLLER_COORDINATED_PPO}
 
     @property
     def coordination_enabled(self) -> bool:
-        return self.controller_type == CONTROLLER_COORDINATED_MARL
+        return self.controller_type in {CONTROLLER_COORDINATED_MARL, CONTROLLER_COORDINATED_PPO}
 
     @property
     def shared_policy_enabled(self) -> bool:
@@ -571,7 +582,22 @@ class TrafficEnv:
             f"coordination={self.coordination_enabled} traffic_scale={self.traffic_scale:.2f}"
         )
         print(f"[RL_INIT] active_intersections={self._agent_ids}")
-        print(f"[RL_REWARD] weights={REWARD_WEIGHTS}")
+        if not self._reward_weights_logged:
+            print("[REWARD_WEIGHTS]")
+            print("ev_delay -> EV waiting-time penalty")
+            print("ev_stop -> EV stop penalty")
+            print("low_speed_near_signal -> slow-EV penalty near signals")
+            print("queue -> local queue penalty")
+            print("queue_growth -> queue buildup penalty")
+            print("throughput -> throughput reward")
+            print("intersection_clear -> reward for clearing intersections")
+            print("neighbor_congestion -> neighbor queue penalty")
+            print("network_congestion -> network-wide congestion penalty")
+            print("downstream_blockage -> spillback penalty")
+            print("traffic_stability -> corridor stability penalty")
+            print("anti_gridlock_penalty -> extra penalty when network congestion or queue length crosses threshold")
+            print({key: float(value) for key, value in REWARD_WEIGHTS.items()})
+            self._reward_weights_logged = True
         self._route_debug()
         return state
 

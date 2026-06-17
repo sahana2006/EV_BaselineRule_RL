@@ -18,12 +18,17 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.config import SimulationConfig
 from src.controller import TrafficSignalController
+from src.coordinated_ppo_agent import CoordinatedPPOAgent
+from src.coord_dueling_dqn_agent import CoordinatedDuelingDQNAgent
 from src.dqn_agent import DQNAgent
 from src.ev_detector import colorize_vehicles
+from src.global_ppo_agent import GlobalPPOAgent
 from src.metrics import TimeSeriesMetrics
 from src.plotting import plot_comparison, plot_timeseries
 from src.rl_env import (
     ACTION_DIM,
+    CONTROLLER_GLOBAL_PPO,
+    CONTROLLER_COORDINATED_PPO,
     CONTROLLER_COORDINATED_MARL,
     CONTROLLER_INDEPENDENT_MARL,
     CONTROLLER_SINGLE_AGENT,
@@ -256,10 +261,279 @@ def run_rl_scenario(
     return summary
 
 
+def run_coord_dueling_dqn_scenario(
+    config: SimulationConfig,
+    model_path: str,
+    csv_name: str,
+    *,
+    controller_type: str,
+    traffic_scale: float = 1.0,
+) -> Dict[str, Any]:
+    path = Path(model_path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Coord dueling DQN checkpoint not found: {path}. Train first: python src/train_rl.py --controller-type coordinated_dueling_dqn --model-out {path}"
+        )
+
+    env = TrafficEnv(
+        config,
+        headless=not config.use_gui,
+        max_episode_steps=config.max_steps,
+        controller_type=CONTROLLER_COORDINATED_MARL,
+        traffic_scale=traffic_scale,
+    )
+    agent = CoordinatedDuelingDQNAgent(state_dim=env.state_dim, action_dim=ACTION_DIM)
+    agent.load(path)
+    agent.epsilon = agent.epsilon_min
+    metrics = TimeSeriesMetrics()
+    reward_trend: List[float] = []
+
+    try:
+        state = env.reset()
+        print(
+            "[COORD_DUELING_DQN_INIT]\n"
+            f"agents={len(env.get_agent_ids())}\n"
+            "shared_policy=True\n"
+            "double_dqn=True\n"
+            "dueling_network=True\n"
+            "prioritized_replay=True\n"
+            f"state_dim={env.state_dim}\n"
+            f"action_dim={env.action_dim}"
+        )
+        if not isinstance(state, dict):
+            raise TypeError("Coordinated dueling DQN evaluation expected a multi-agent state dictionary.")
+        if config.ev_id in traci.vehicle.getIDList():
+            colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
+            metrics.capture(config.ev_id)
+
+        done = False
+        while not done:
+            actions = agent.predict_actions(state)
+            next_state, rewards, done, _info = env.step(actions)
+            if not isinstance(next_state, dict) or not isinstance(rewards, dict):
+                raise TypeError("Coordinated dueling DQN evaluation returned unexpected single-agent outputs.")
+            reward_trend.append(float(sum(rewards.values())))
+            state = next_state
+
+            if config.ev_id in traci.vehicle.getIDList():
+                colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
+                metrics.capture(config.ev_id)
+
+        if config.ev_id not in traci.vehicle.getIDList():
+            post_ev_steps = int(config.post_ev_buffer_seconds / max(config.step_length, 0.1))
+            mode_name = "coordinated dueling DQN"
+            print(f"[INFO] EV left network in {mode_name} mode. Keeping simulation for {config.post_ev_buffer_seconds}s more.")
+            for _ in range(post_ev_steps):
+                try:
+                    traci.simulationStep()
+                except traci_exceptions.FatalTraCIError as err:
+                    print(f"[WARN] SUMO closed connection during {mode_name} post-EV buffer: {err}")
+                    break
+                colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
+                if traci.simulation.getMinExpectedNumber() == 0:
+                    print(f"[WARN] No vehicles are running (minExpected=0). Ending {mode_name} scenario safely.")
+                    break
+    finally:
+        env.close()
+
+    csv_path = config.csv_dir / csv_name
+    metrics.save_csv(csv_path)
+    summary = summarize_metrics(metrics)
+    summary["_metrics"] = metrics
+    summary["_reward_trend"] = reward_trend
+    return summary
+
+
+def run_global_ppo_scenario(
+    config: SimulationConfig,
+    model_path: str,
+    csv_name: str,
+    *,
+    controller_type: str = CONTROLLER_GLOBAL_PPO,
+    traffic_scale: float = 1.0,
+) -> Dict[str, Any]:
+    path = Path(model_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Global PPO checkpoint not found: {path}. Train first: python src/train_rl.py --controller-type global_ppo --model-out {path}")
+
+    env = TrafficEnv(
+        config,
+        headless=not config.use_gui,
+        max_episode_steps=config.max_steps,
+        controller_type=controller_type,
+        traffic_scale=traffic_scale,
+    )
+    metrics = TimeSeriesMetrics()
+    reward_trend: List[float] = []
+
+    try:
+        state = env.reset()
+        if isinstance(state, dict):
+            raise TypeError("Global PPO evaluation expected a single state vector.")
+        agent = GlobalPPOAgent(
+            state_dim=env.state_dim,
+            action_dim=ACTION_DIM,
+            learning_rate=1e-3,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_eps=0.2,
+            entropy_coef=0.001,
+            value_coef=0.5,
+            ppo_epochs=4,
+            batch_size=256,
+        )
+        agent.load(path)
+        print(
+            "[GLOBAL_PPO_INIT]\n"
+            f"state_dim={env.state_dim}\n"
+            f"action_dim={env.action_dim}\n"
+            "lr=1e-3\n"
+            "entropy_coef=0.001\n"
+            "reward_normalization=True"
+        )
+
+        if config.ev_id in traci.vehicle.getIDList():
+            colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
+            metrics.capture(config.ev_id)
+
+        done = False
+        while not done:
+            action = agent.predict(state)
+            next_state, reward, done, _info = env.step(action)
+            if isinstance(next_state, dict) or isinstance(reward, dict):
+                raise TypeError("Global PPO evaluation returned unexpected multi-agent outputs.")
+            reward_trend.append(float(reward))
+            state = next_state
+
+            if config.ev_id in traci.vehicle.getIDList():
+                colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
+                metrics.capture(config.ev_id)
+
+        if config.ev_id not in traci.vehicle.getIDList():
+            post_ev_steps = int(config.post_ev_buffer_seconds / max(config.step_length, 0.1))
+            mode_name = "global PPO"
+            print(f"[INFO] EV left network in {mode_name} mode. Keeping simulation for {config.post_ev_buffer_seconds}s more.")
+            for _ in range(post_ev_steps):
+                try:
+                    traci.simulationStep()
+                except traci_exceptions.FatalTraCIError as err:
+                    print(f"[WARN] SUMO closed connection during {mode_name} post-EV buffer: {err}")
+                    break
+                colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
+                if traci.simulation.getMinExpectedNumber() == 0:
+                    print(f"[WARN] No vehicles are running (minExpected=0). Ending {mode_name} scenario safely.")
+                    break
+    finally:
+        env.close()
+
+    csv_path = config.csv_dir / csv_name
+    metrics.save_csv(csv_path)
+    summary = summarize_metrics(metrics)
+    summary["_metrics"] = metrics
+    summary["_reward_trend"] = reward_trend
+    return summary
+
+
+def run_coordinated_ppo_scenario(
+    config: SimulationConfig,
+    model_path: str,
+    csv_name: str,
+    *,
+    controller_type: str = CONTROLLER_COORDINATED_PPO,
+    traffic_scale: float = 1.0,
+) -> Dict[str, Any]:
+    path = Path(model_path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Coordinated PPO checkpoint not found: {path}. Train first: python src/train_rl.py --controller-type coordinated_ppo --model-out {path}"
+        )
+
+    env = TrafficEnv(
+        config,
+        headless=not config.use_gui,
+        max_episode_steps=config.max_steps,
+        controller_type=controller_type,
+        traffic_scale=traffic_scale,
+    )
+    metrics = TimeSeriesMetrics()
+    reward_trend: List[float] = []
+
+    try:
+        state = env.reset()
+        if not isinstance(state, dict):
+            raise TypeError("Coordinated PPO evaluation expected a multi-agent state dictionary.")
+        agent_ids = env.get_agent_ids() or sorted(state.keys())
+        agent = CoordinatedPPOAgent(
+            state_dim=env.state_dim,
+            action_dim=ACTION_DIM,
+            learning_rate=1e-3,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_eps=0.2,
+            entropy_coef=0.001,
+            value_coef=0.5,
+            ppo_epochs=4,
+            batch_size=256,
+        )
+        agent.load(path)
+        print(
+            "[COORDINATED_PPO_INIT]\n"
+            f"agents={len(agent_ids)}\n"
+            "shared_policy=True\n"
+            f"state_dim={env.state_dim}\n"
+            f"action_dim={env.action_dim}\n"
+            "coordination=True"
+        )
+
+        if config.ev_id in traci.vehicle.getIDList():
+            colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
+            metrics.capture(config.ev_id)
+
+        done = False
+        while not done:
+            actions = agent.predict_actions(state)
+            next_state, rewards, done, _info = env.step(actions)
+            if not isinstance(next_state, dict) or not isinstance(rewards, dict):
+                raise TypeError("Coordinated PPO evaluation returned unexpected single-agent outputs.")
+            reward_trend.append(float(sum(rewards.values())))
+            state = next_state
+
+            if config.ev_id in traci.vehicle.getIDList():
+                colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
+                metrics.capture(config.ev_id)
+
+        if config.ev_id not in traci.vehicle.getIDList():
+            post_ev_steps = int(config.post_ev_buffer_seconds / max(config.step_length, 0.1))
+            mode_name = "coordinated PPO"
+            print(f"[INFO] EV left network in {mode_name} mode. Keeping simulation for {config.post_ev_buffer_seconds}s more.")
+            for _ in range(post_ev_steps):
+                try:
+                    traci.simulationStep()
+                except traci_exceptions.FatalTraCIError as err:
+                    print(f"[WARN] SUMO closed connection during {mode_name} post-EV buffer: {err}")
+                    break
+                colorize_vehicles(config.ev_id, config.ev_color_rgba, config.normal_vehicle_color_rgba)
+                if traci.simulation.getMinExpectedNumber() == 0:
+                    print(f"[WARN] No vehicles are running (minExpected=0). Ending {mode_name} scenario safely.")
+                    break
+    finally:
+        env.close()
+
+    csv_path = config.csv_dir / csv_name
+    metrics.save_csv(csv_path)
+    summary = summarize_metrics(metrics)
+    summary["_metrics"] = metrics
+    summary["_reward_trend"] = reward_trend
+    return summary
+
+
 def execute_single(
     config: SimulationConfig,
     mode: str = "full_model",
     model_path: str | None = None,
+    coord_dueling_model_path: str | None = None,
+    ppo_model_path: str | None = None,
+    coordinated_ppo_model_path: str | None = None,
     independent_marl_model_path: str | None = None,
     coordinated_marl_model_path: str | None = None,
     traffic_scale: float = 1.0,
@@ -274,6 +548,36 @@ def execute_single(
             model_path=model_path,
             csv_name=config.rl_model_csv_name,
             controller_type=CONTROLLER_SINGLE_AGENT,
+            traffic_scale=traffic_scale,
+        )
+    elif mode == "coordinated_ppo":
+        if not coordinated_ppo_model_path:
+            raise ValueError("coordinated_ppo requires --coordinated-ppo-model-path")
+        summary = run_coordinated_ppo_scenario(
+            config,
+            model_path=coordinated_ppo_model_path,
+            csv_name=config.coordinated_ppo_model_csv_name,
+            controller_type=CONTROLLER_COORDINATED_PPO,
+            traffic_scale=traffic_scale,
+        )
+    elif mode == "coordinated_dueling_dqn":
+        if not coord_dueling_model_path:
+            raise ValueError("coordinated_dueling_dqn requires --coord-dueling-model-path")
+        summary = run_coord_dueling_dqn_scenario(
+            config,
+            model_path=coord_dueling_model_path,
+            csv_name=config.coord_dueling_dqn_model_csv_name,
+            controller_type=CONTROLLER_COORDINATED_MARL,
+            traffic_scale=traffic_scale,
+        )
+    elif mode == "global_ppo":
+        if not ppo_model_path:
+            raise ValueError("global_ppo requires --ppo-model-path")
+        summary = run_global_ppo_scenario(
+            config,
+            model_path=ppo_model_path,
+            csv_name=config.global_ppo_model_csv_name,
+            controller_type=CONTROLLER_GLOBAL_PPO,
             traffic_scale=traffic_scale,
         )
     elif mode == "independent_marl_model":
@@ -303,7 +607,11 @@ def execute_single(
     summary.pop("_reward_trend", None)
     if metrics is None:
         raise RuntimeError("Metrics were not captured.")
-    plot_timeseries(metrics, config.plot_dir, prefix=mode)
+    if mode == "coordinated_dueling_dqn":
+        plot_dir = config.plot_dir / "coord_dueling_dqn"
+    else:
+        plot_dir = config.plot_dir
+    plot_timeseries(metrics, plot_dir, prefix=mode)
     print(f"Scenario summary: {summary}")
 
 
@@ -603,11 +911,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--traffic-scale", type=float, default=1.0, help="SUMO demand scaling for heavy-traffic experiments")
     parser.add_argument(
         "--mode",
-        choices=["full_model", "fixed_time", "intrusive_only", "rl_model", "independent_marl_model", "coordinated_marl_model", "marl_model"],
+        choices=["full_model", "fixed_time", "intrusive_only", "rl_model", "coordinated_dueling_dqn", "global_ppo", "coordinated_ppo", "independent_marl_model", "coordinated_marl_model", "marl_model"],
         default="full_model",
         help="Control mode",
     )
     parser.add_argument("--model-path", default=str(PROJECT_ROOT / "outputs" / "models" / "dqn.pt"), help="Single-agent RL checkpoint")
+    parser.add_argument("--coord-dueling-model-path", default=str(PROJECT_ROOT / "outputs" / "models" / "coord_dueling_dqn.pt"), help="Coordinated dueling DQN checkpoint")
+    parser.add_argument("--ppo-model-path", default=str(PROJECT_ROOT / "outputs" / "models" / "global_ppo.pt"), help="Global PPO checkpoint")
+    parser.add_argument("--coordinated-ppo-model-path", default=str(PROJECT_ROOT / "outputs" / "models" / "coordinated_ppo.pt"), help="Coordinated PPO checkpoint")
     parser.add_argument(
         "--independent-marl-model-path",
         default=str(PROJECT_ROOT / "outputs" / "models" / "dqn_marl.pt"),
@@ -682,6 +993,9 @@ def main() -> None:
         cfg,
         mode=args.mode,
         model_path=args.model_path if args.mode == "rl_model" else None,
+        coord_dueling_model_path=args.coord_dueling_model_path if args.mode == "coordinated_dueling_dqn" else None,
+        ppo_model_path=args.ppo_model_path if args.mode == "global_ppo" else None,
+        coordinated_ppo_model_path=args.coordinated_ppo_model_path if args.mode == "coordinated_ppo" else None,
         independent_marl_model_path=args.independent_marl_model_path if args.mode == "independent_marl_model" else args.independent_marl_model_path,
         coordinated_marl_model_path=args.coordinated_marl_model_path if args.mode in {"coordinated_marl_model", "marl_model"} else args.coordinated_marl_model_path,
         traffic_scale=args.traffic_scale,
