@@ -18,6 +18,10 @@ class SimulationConfig:
     rl_model_csv_name: str = "rl_model_metrics.csv"
     global_ppo_model_csv_name: str = "global_ppo_model_metrics.csv"
     coordinated_ppo_model_csv_name: str = "coordinated_ppo_model_metrics.csv"
+    multi_level_coordinated_dqn_model_csv_name: str = "multi_level_coordinated_dqn_model_metrics.csv"
+    congestion_aware_coordinated_ppo_model_csv_name: str = "congestion_aware_coordinated_ppo_model_metrics.csv"
+    adaptive_reward_coordinated_ppo_model_csv_name: str = "adaptive_reward_coordinated_ppo_model_metrics.csv"
+    multi_level_coordinated_ppo_model_csv_name: str = "multi_level_coordinated_ppo_model_metrics.csv"
     coord_dueling_dqn_model_csv_name: str = "coord_dueling_dqn_model_metrics.csv"
     step_length: float = 1.0
     post_ev_buffer_seconds: int = 90

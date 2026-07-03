@@ -26,12 +26,41 @@ ACTION_DIM = len(ACTIONS)
 CONTROLLER_SINGLE_AGENT = "single_agent"
 CONTROLLER_GLOBAL_PPO = "global_ppo"
 CONTROLLER_COORDINATED_PPO = "coordinated_ppo"
+CONTROLLER_ADAPTIVE_REWARD_COORDINATED_PPO = "adaptive_reward_coordinated_ppo"
+CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO = "congestion_aware_coordinated_ppo"
+CONTROLLER_MULTI_LEVEL_COORDINATED_PPO = "multi_level_coordinated_ppo"
+CONTROLLER_MULTI_LEVEL_COORDINATED_DQN = "multi_level_coordinated_dqn"
 CONTROLLER_INDEPENDENT_MARL = "independent_marl"
 CONTROLLER_COORDINATED_MARL = "coordinated_marl"
 CONTROLLER_MULTI_AGENT = CONTROLLER_INDEPENDENT_MARL
 
 BASE_STATE_DIM = 10
 COORDINATED_STATE_DIM = 15
+MULTI_LEVEL_COORDINATED_STATE_DIM = 29
+CONGESTION_AWARE_COORDINATED_STATE_DIM = 26
+
+REWARD_NORMALIZATION_SCALES: Dict[str, float] = {
+    "ev_waiting_time": 30.0,
+    "ev_stops": 1.0,
+    "low_speed_near_signal": 1.0,
+    "queue_length": 20.0,
+    "queue_growth": 10.0,
+    "throughput": 10.0,
+    "signal_switch": 1.0,
+    "intersection_clear": 1.0,
+    "neighbor_congestion": 20.0,
+    "network_congestion": 1.0,
+    "corridor_flow": 1.0,
+    "downstream_blockage": 1.0,
+    "traffic_stability": 1.0,
+    "congestion_reduction": 1.0,
+    "queue_stabilization": 1.0,
+    "spillback_prevention": 1.0,
+    "congestion_transfer": 1.0,
+    "corridor_congestion": 1.0,
+    "congestion_imbalance": 1.0,
+    "congestion_trend": 1.0,
+}
 
 REWARD_WEIGHTS: Dict[str, float] = {
     "ev_delay": 1.92,
@@ -47,6 +76,13 @@ REWARD_WEIGHTS: Dict[str, float] = {
     "corridor_flow": 0.40,
     "downstream_blockage": 0.36,
     "traffic_stability": 0.24,
+    "congestion_reduction": 0.90,
+    "queue_stabilization": 0.70,
+    "spillback_prevention": 1.00,
+    "congestion_transfer": 0.55,
+    "corridor_congestion": 0.60,
+    "congestion_imbalance": 0.35,
+    "congestion_trend": 0.45,
 }
 
 LOW_SPEED_NEAR_SIGNAL_THRESHOLD = 3.0
@@ -54,34 +90,115 @@ NEAR_SIGNAL_DISTANCE_THRESHOLD = 60.0
 MAX_EV_FEATURE_DISTANCE = 300.0
 DOWNSTREAM_CONGESTION_QUEUE = 12.0
 
+EV_REWARD_COMPONENT_KEYS = frozenset(
+    {
+        "ev_delay_penalty",
+        "ev_stop_penalty",
+        "low_speed_penalty",
+        "intersection_clear_reward",
+    }
+)
 
-def compute_reward(metrics: Dict[str, Any], weights: Dict[str, float] | None = None) -> tuple[float, Dict[str, float]]:
+ADAPTIVE_CONGESTION_LOW_THRESHOLD = 0.33
+ADAPTIVE_CONGESTION_HIGH_THRESHOLD = 0.66
+ADAPTIVE_REWARD_WEIGHTS_BY_LEVEL: Dict[str, tuple[float, float]] = {
+    "low": (0.7, 0.3),
+    "medium": (0.5, 0.5),
+    "high": (0.3, 0.7),
+}
+
+
+def classify_congestion_level(congestion_index: float) -> str:
+    if congestion_index < ADAPTIVE_CONGESTION_LOW_THRESHOLD:
+        return "low"
+    if congestion_index < ADAPTIVE_CONGESTION_HIGH_THRESHOLD:
+        return "medium"
+    return "high"
+
+
+def adaptive_scales_for_level(level: str) -> tuple[float, float]:
+    return ADAPTIVE_REWARD_WEIGHTS_BY_LEVEL.get(level, ADAPTIVE_REWARD_WEIGHTS_BY_LEVEL["medium"])
+
+
+def _normalized_reward_metric(metrics: Dict[str, Any], key: str) -> float:
+    scale = REWARD_NORMALIZATION_SCALES.get(key, 1.0)
+    if scale <= 0:
+        return float(metrics[key])
+    return float(np.clip(float(metrics[key]) / scale, 0.0, 1.0))
+
+
+def compute_reward(
+    metrics: Dict[str, Any],
+    weights: Dict[str, float] | None = None,
+    *,
+    adaptive_scales: tuple[float, float] | None = None,
+) -> tuple[float, Dict[str, float]]:
     """Return total reward plus a readable per-component breakdown."""
     w = REWARD_WEIGHTS if weights is None else weights
+
+    ev_delay = _normalized_reward_metric(metrics, "ev_waiting_time")
+    ev_stop = _normalized_reward_metric(metrics, "ev_stops")
+    low_speed = _normalized_reward_metric(metrics, "low_speed_near_signal")
+    queue_length = _normalized_reward_metric(metrics, "queue_length")
+    queue_growth = _normalized_reward_metric(metrics, "queue_growth")
+    throughput = _normalized_reward_metric(metrics, "throughput")
+    signal_switch = _normalized_reward_metric(metrics, "signal_switch")
+    intersection_clear = _normalized_reward_metric(metrics, "intersection_clear")
+    neighbor_congestion = _normalized_reward_metric(metrics, "neighbor_congestion")
+    network_congestion = _normalized_reward_metric(metrics, "network_congestion")
+    corridor_flow = _normalized_reward_metric(metrics, "corridor_flow")
+    downstream_blockage = _normalized_reward_metric(metrics, "downstream_blockage")
+    traffic_stability = _normalized_reward_metric(metrics, "traffic_stability")
+    congestion_reduction = _normalized_reward_metric(metrics, "congestion_reduction")
+    queue_stabilization = _normalized_reward_metric(metrics, "queue_stabilization")
+    spillback_prevention = _normalized_reward_metric(metrics, "spillback_prevention")
+    congestion_transfer = _normalized_reward_metric(metrics, "congestion_transfer")
+    corridor_congestion = _normalized_reward_metric(metrics, "corridor_congestion")
+    congestion_imbalance = _normalized_reward_metric(metrics, "congestion_imbalance")
+    congestion_trend = _normalized_reward_metric(metrics, "congestion_trend")
+
     components = {
-        "ev_delay_penalty": -w["ev_delay"] * float(metrics["ev_waiting_time"]),
-        "ev_stop_penalty": -w["ev_stop"] * float(metrics["ev_stops"]),
-        "low_speed_penalty": -w["low_speed_near_signal"] * float(metrics["low_speed_near_signal"]),
-        "queue_penalty": -w["queue"] * float(metrics["queue_length"]),
-        "queue_growth_penalty": -w["queue_growth"] * float(metrics["queue_growth"]),
-        "throughput_reward": w["throughput"] * float(metrics["throughput"]),
-        "switch_penalty": -w["switch"] * float(metrics["signal_switch"]),
-        "intersection_clear_reward": w["intersection_clear"] * float(metrics["intersection_clear"]),
-        "neighbor_congestion_penalty": -w["neighbor_congestion"] * float(metrics["neighbor_congestion"]),
-        "network_congestion_penalty": -w["network_congestion"] * float(metrics["network_congestion"]),
-        "corridor_flow_reward": w["corridor_flow"] * float(metrics["corridor_flow"]),
-        "downstream_blockage_penalty": -w["downstream_blockage"] * float(metrics["downstream_blockage"]),
-        "traffic_stability_penalty": -w["traffic_stability"] * float(metrics["traffic_stability"]),
+        "ev_delay_penalty": -w["ev_delay"] * ev_delay,
+        "ev_stop_penalty": -w["ev_stop"] * ev_stop,
+        "low_speed_penalty": -w["low_speed_near_signal"] * low_speed,
+        "queue_penalty": -w["queue"] * queue_length,
+        "queue_growth_penalty": -w["queue_growth"] * queue_growth,
+        "throughput_reward": w["throughput"] * throughput,
+        "switch_penalty": -w["switch"] * signal_switch,
+        "intersection_clear_reward": w["intersection_clear"] * intersection_clear,
+        "neighbor_congestion_penalty": -w["neighbor_congestion"] * neighbor_congestion,
+        "network_congestion_penalty": -w["network_congestion"] * network_congestion,
+        "corridor_flow_reward": w["corridor_flow"] * corridor_flow,
+        "downstream_blockage_penalty": -w["downstream_blockage"] * downstream_blockage,
+        "traffic_stability_penalty": -w["traffic_stability"] * traffic_stability,
+        "congestion_reduction_reward": w["congestion_reduction"] * congestion_reduction,
+        "queue_stabilization_reward": w["queue_stabilization"] * queue_stabilization,
+        "spillback_prevention_reward": w["spillback_prevention"] * spillback_prevention,
+        "congestion_transfer_penalty": -w["congestion_transfer"] * congestion_transfer,
+        "corridor_congestion_penalty": -w["corridor_congestion"] * corridor_congestion,
+        "congestion_imbalance_penalty": -w["congestion_imbalance"] * congestion_imbalance,
+        "congestion_trend_penalty": -w["congestion_trend"] * congestion_trend,
     }
     anti_gridlock_penalty = 0.0
-    network_congestion = float(metrics["network_congestion"])
-    queue_length = float(metrics["queue_length"])
-    if network_congestion > 0.30:
-        anti_gridlock_penalty -= min(2.0, (network_congestion - 0.30) * 8.0)
-    if queue_length > 20.0:
-        anti_gridlock_penalty -= min(2.0, (queue_length - 20.0) * 0.05)
+    if float(metrics["network_congestion"]) > 0.30:
+        anti_gridlock_penalty -= min(1.0, (float(metrics["network_congestion"]) - 0.30) * 2.5)
+    if float(metrics["queue_length"]) > 20.0:
+        anti_gridlock_penalty -= min(1.0, (float(metrics["queue_length"]) - 20.0) / 20.0)
     components["anti_gridlock_penalty"] = anti_gridlock_penalty
-    total = float(sum(components.values()))
+
+    ev_sum = float(sum(components[key] for key in EV_REWARD_COMPONENT_KEYS))
+    network_sum = float(sum(value for key, value in components.items() if key not in EV_REWARD_COMPONENT_KEYS))
+
+    if adaptive_scales is not None:
+        ev_weight, network_weight = adaptive_scales
+        total = float(ev_weight * ev_sum + network_weight * network_sum)
+        components["_ev_reward_component"] = ev_sum
+        components["_network_reward_component"] = network_sum
+        components["_adaptive_ev_weight"] = float(ev_weight)
+        components["_adaptive_network_weight"] = float(network_weight)
+    else:
+        total = float(ev_sum + network_sum)
+
     return total, components
 
 
@@ -135,13 +252,29 @@ class AgentContext:
     local_density: int
     local_queue: float
     neighbor_queue_avg: float
+    neighbor_queue_std: float
     downstream_congestion: float
     neighbor_phase_avg: float
     incoming_traffic_estimate: float
     ev_neighbor_eta: float
     approaching_density: float
+    neighbor_waiting_time: float
+    neighbor_throughput_estimate: float
+    downstream_spillback_indicator: float
+    neighbor_emergency_vehicle_present: float
     ev_relevant: float
     on_ev_route: bool
+    local_congestion_index: float
+    neighbor_congestion_index: float
+    downstream_blockage_ratio: float
+    queue_growth_rate: float
+    corridor_congestion_pressure: float
+    network_congestion_score: float
+    congestion_imbalance_ns: float
+    congestion_imbalance_ew: float
+    congestion_trend_local: float
+    congestion_trend_network: float
+    congestion_transfer_risk: float
 
 
 class TrafficEnv:
@@ -193,7 +326,28 @@ class TrafficEnv:
         self._prev_agent_phases: Dict[str, int] = {}
         self._last_reward_breakdowns: Dict[str, Dict[str, float]] = {}
         self._last_coordination_terms: Dict[str, Dict[str, float]] = {}
+        self._last_congestion_features: Dict[str, Dict[str, float]] = {}
+        self._last_multi_level_diagnostics: Dict[str, Dict[str, float]] = {}
         self._reward_weights_logged = False
+        self.debug_congestion_features = True
+        self._congestion_feature_seen_nonzero = False
+        self._congestion_feature_warning_logged = False
+        self._adaptive_mode_steps: Dict[str, int] = {"low": 0, "medium": 0, "high": 0}
+        self._adaptive_ev_weight_sum = 0.0
+        self._adaptive_network_weight_sum = 0.0
+        self._adaptive_step_count = 0
+        self._adaptive_ev_component_sum = 0.0
+        self._adaptive_network_component_sum = 0.0
+        self._adaptive_congestion_index_sum = 0.0
+        self._last_adaptive_congestion_level = "medium"
+        self._last_adaptive_congestion_index = 0.0
+        self._last_adaptive_reward_info: Dict[str, float | str] = {}
+        self._red_signal_probe_samples: Dict[int, int] = {1: 0, 2: 0}
+        self._red_signal_probe_reward_sums: Dict[int, float] = {1: 0.0, 2: 0.0}
+        self._red_signal_probe_move_sums: Dict[int, float] = {1: 0.0, 2: 0.0}
+        self._red_signal_probe_wait_delta_sums: Dict[int, float] = {1: 0.0, 2: 0.0}
+        self._red_signal_probe_speed_delta_sums: Dict[int, float] = {1: 0.0, 2: 0.0}
+        self._red_signal_probe_print_count = 0
 
     def _close(self) -> None:
         if not self._started:
@@ -273,11 +427,30 @@ class TrafficEnv:
 
     @property
     def is_multi_agent(self) -> bool:
-        return self.controller_type in {CONTROLLER_INDEPENDENT_MARL, CONTROLLER_COORDINATED_MARL, CONTROLLER_COORDINATED_PPO}
+        return self.controller_type in {
+            CONTROLLER_INDEPENDENT_MARL,
+            CONTROLLER_COORDINATED_MARL,
+            CONTROLLER_COORDINATED_PPO,
+            CONTROLLER_ADAPTIVE_REWARD_COORDINATED_PPO,
+            CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO,
+            CONTROLLER_MULTI_LEVEL_COORDINATED_PPO,
+            CONTROLLER_MULTI_LEVEL_COORDINATED_DQN,
+        }
 
     @property
     def coordination_enabled(self) -> bool:
-        return self.controller_type in {CONTROLLER_COORDINATED_MARL, CONTROLLER_COORDINATED_PPO}
+        return self.controller_type in {
+            CONTROLLER_COORDINATED_MARL,
+            CONTROLLER_COORDINATED_PPO,
+            CONTROLLER_ADAPTIVE_REWARD_COORDINATED_PPO,
+            CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO,
+            CONTROLLER_MULTI_LEVEL_COORDINATED_PPO,
+            CONTROLLER_MULTI_LEVEL_COORDINATED_DQN,
+        }
+
+    @property
+    def adaptive_reward_enabled(self) -> bool:
+        return self.controller_type == CONTROLLER_ADAPTIVE_REWARD_COORDINATED_PPO
 
     @property
     def shared_policy_enabled(self) -> bool:
@@ -285,6 +458,10 @@ class TrafficEnv:
 
     @property
     def state_dim(self) -> int:
+        if self.controller_type in {CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
+            return MULTI_LEVEL_COORDINATED_STATE_DIM
+        if self.controller_type == CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO:
+            return CONGESTION_AWARE_COORDINATED_STATE_DIM
         return COORDINATED_STATE_DIM if self.coordination_enabled else BASE_STATE_DIM
 
     @property
@@ -305,6 +482,13 @@ class TrafficEnv:
             "incoming_traffic_estimate": ctx.incoming_traffic_estimate,
             "neighbor_phase_avg": ctx.neighbor_phase_avg,
             "ev_neighbor_eta": ctx.ev_neighbor_eta,
+            "local_congestion_index": ctx.local_congestion_index,
+            "neighbor_congestion_index": ctx.neighbor_congestion_index,
+            "downstream_blockage_ratio": ctx.downstream_blockage_ratio,
+            "queue_growth_rate": ctx.queue_growth_rate,
+            "corridor_congestion_pressure": ctx.corridor_congestion_pressure,
+            "network_congestion_score": ctx.network_congestion_score,
+            "congestion_transfer_risk": ctx.congestion_transfer_risk,
         }
 
     def _nearest_signal_ahead(self) -> Optional[RouteSignal]:
@@ -340,6 +524,51 @@ class TrafficEnv:
             return 0.0
         totals = [float(sum(self._directional_queues(neighbor_id).values())) for neighbor_id in neighbors]
         return float(sum(totals) / len(totals)) if totals else 0.0
+
+    def _neighbor_queue_std(self, tl_id: str) -> float:
+        neighbors = self._neighbor_map.get(tl_id, [])
+        if len(neighbors) < 2:
+            return 0.0
+        totals = [float(sum(self._directional_queues(neighbor_id).values())) for neighbor_id in neighbors]
+        return float(np.std(np.asarray(totals, dtype=np.float32)))
+
+    def _average_neighbor_waiting_time(self, tl_id: str) -> float:
+        neighbors = self._neighbor_map.get(tl_id, [])
+        if not neighbors:
+            return 0.0
+        wait_totals: list[float] = []
+        for neighbor_id in neighbors:
+            lane_waits = []
+            for lane_id in set(traci.trafficlight.getControlledLanes(neighbor_id)):
+                try:
+                    lane_waits.append(float(traci.lane.getWaitingTime(lane_id)))
+                except traci_exceptions.TraCIException:
+                    continue
+            wait_totals.append(float(sum(lane_waits) / len(lane_waits)) if lane_waits else 0.0)
+        return float(sum(wait_totals) / len(wait_totals)) if wait_totals else 0.0
+
+    def _average_neighbor_throughput(self, tl_id: str) -> float:
+        neighbors = self._neighbor_map.get(tl_id, [])
+        if not neighbors:
+            return 0.0
+        throughput_totals: list[float] = []
+        for neighbor_id in neighbors:
+            lane_flows = []
+            for lane_id in set(traci.trafficlight.getControlledLanes(neighbor_id)):
+                try:
+                    lane_flows.append(float(traci.lane.getLastStepVehicleNumber(lane_id)))
+                except traci_exceptions.TraCIException:
+                    continue
+            throughput_totals.append(float(sum(lane_flows) / len(lane_flows)) if lane_flows else 0.0)
+        return float(sum(throughput_totals) / len(throughput_totals)) if throughput_totals else 0.0
+
+    def _neighbor_emergency_vehicle_present(self, tl_id: str) -> float:
+        neighbors = self._neighbor_map.get(tl_id, [])
+        if not neighbors or self.ev_id not in traci.vehicle.getIDList():
+            return 0.0
+        progress = route_progress_for_vehicle(self.ev_id, self._route_signals)
+        upcoming_ids = {signal.tl_id for signal in progress.upcoming}
+        return 1.0 if any(neighbor_id in upcoming_ids for neighbor_id in neighbors) else 0.0
 
     def _phase_features(self, tl_id: str) -> Tuple[float, float, int]:
         logic = traci.trafficlight.getAllProgramLogics(tl_id)
@@ -423,6 +652,160 @@ class TrafficEnv:
             demand_terms.append((neighbor_queue / 20.0) * 0.45 + (outgoing_flow / 25.0) * 0.35 + (neighbor_density / 40.0) * 0.20)
         return float(sum(demand_terms) / len(demand_terms))
 
+    def _global_traffic_features(self) -> Dict[str, float]:
+        veh_ids = traci.vehicle.getIDList()
+        vehicle_count = max(len(veh_ids), 1)
+        agent_count = max(len(self._agent_ids), 1)
+        queues = [float(sum(self._directional_queues(tl_id).values())) for tl_id in self._agent_ids]
+        waits = [float(traci.vehicle.getWaitingTime(v_id)) for v_id in veh_ids] if veh_ids else []
+        avg_queue_length_raw = float(sum(queues) / len(queues)) if queues else 0.0
+        avg_waiting_time_raw = float(sum(waits) / len(waits)) if waits else 0.0
+        total_network_congestion_raw = self._network_congestion_ratio()
+        throughput_raw = float(traci.simulation.getArrivedNumber())
+        pct_congested_intersections_raw = float(
+            sum(1 for tl_id in self._agent_ids if float(np.clip(sum(self._directional_queues(tl_id).values()) / 20.0, 0.0, 1.0)) >= 0.5)
+            / max(len(self._agent_ids), 1)
+        ) if self._agent_ids else 0.0
+        blocked_approaches_raw = 0.0
+        total_approaches = 0
+        for tl_id in self._agent_ids:
+            for lane_id in set(traci.trafficlight.getControlledLanes(tl_id)):
+                total_approaches += 1
+                try:
+                    if float(traci.lane.getLastStepHaltingNumber(lane_id)) >= 3.0:
+                        blocked_approaches_raw += 1.0
+                except traci_exceptions.TraCIException:
+                    continue
+        global_traffic_density_raw = float(vehicle_count / max(agent_count * 12.0, 1.0))
+        ev_network_progress_raw = 0.0
+        if self.ev_id in veh_ids and self._route_signals:
+            progress = route_progress_for_vehicle(self.ev_id, self._route_signals)
+            ev_network_progress_raw = float(len(progress.passed) / max(len(self._route_signals), 1))
+
+        return {
+            "avg_queue_length": float(np.clip(avg_queue_length_raw / 20.0, 0.0, 1.0)),
+            "avg_waiting_time": float(np.clip(avg_waiting_time_raw / 60.0, 0.0, 1.0)),
+            "total_network_congestion": float(np.clip(total_network_congestion_raw, 0.0, 1.0)),
+            "throughput": float(np.clip(throughput_raw / max(agent_count * 5.0, 1.0), 0.0, 1.0)),
+            "pct_congested_intersections": float(np.clip(pct_congested_intersections_raw, 0.0, 1.0)),
+            "blocked_approaches": float(np.clip(blocked_approaches_raw / max(total_approaches, 1), 0.0, 1.0)),
+            "global_traffic_density": float(np.clip(global_traffic_density_raw, 0.0, 1.0)),
+            "ev_network_progress": float(np.clip(ev_network_progress_raw, 0.0, 1.0)),
+        }
+
+    def _multi_level_reward_contributions(self, breakdown: Dict[str, float]) -> Dict[str, float]:
+        local = float(
+            breakdown.get("ev_delay_penalty", 0.0)
+            + breakdown.get("ev_stop_penalty", 0.0)
+            + breakdown.get("low_speed_penalty", 0.0)
+            + breakdown.get("queue_penalty", 0.0)
+            + breakdown.get("queue_growth_penalty", 0.0)
+            + breakdown.get("throughput_reward", 0.0)
+            + breakdown.get("switch_penalty", 0.0)
+            + breakdown.get("intersection_clear_reward", 0.0)
+            + breakdown.get("anti_gridlock_penalty", 0.0)
+        )
+        neighbor = float(
+            breakdown.get("neighbor_congestion_penalty", 0.0)
+            + breakdown.get("downstream_blockage_penalty", 0.0)
+            + breakdown.get("traffic_stability_penalty", 0.0)
+            + breakdown.get("corridor_flow_reward", 0.0)
+            + breakdown.get("congestion_transfer_penalty", 0.0)
+            + breakdown.get("corridor_congestion_penalty", 0.0)
+            + breakdown.get("congestion_imbalance_penalty", 0.0)
+            + breakdown.get("congestion_trend_penalty", 0.0)
+        )
+        global_ = float(
+            breakdown.get("network_congestion_penalty", 0.0)
+            + breakdown.get("congestion_reduction_reward", 0.0)
+            + breakdown.get("queue_stabilization_reward", 0.0)
+            + breakdown.get("spillback_prevention_reward", 0.0)
+        )
+        return {
+            "local_reward_contribution": local,
+            "neighbor_coordination_contribution": neighbor,
+            "global_optimization_contribution": global_,
+        }
+
+    def _controlled_lane_count(self, tl_id: str) -> int:
+        return max(len(set(traci.trafficlight.getControlledLanes(tl_id))), 1)
+
+    def _network_congestion_score(self) -> float:
+        vehicle_count = max(len(traci.vehicle.getIDList()), 1)
+        return float(np.clip(self._queue_length_network() / vehicle_count, 0.0, 1.0))
+
+    def _congestion_feature_snapshot(self, tl_id: str, ctx: AgentContext) -> Dict[str, float]:
+        controlled_lane_count = self._controlled_lane_count(tl_id)
+        prev_local_queue = self._prev_agent_queue_totals.get(tl_id, ctx.local_queue)
+        prev_network_queue = self._prev_network_queue
+        network_queue = float(self._queue_length_network())
+        local_queue_delta = ctx.local_queue - prev_local_queue
+        network_queue_delta = network_queue - prev_network_queue
+        local_congestion_index = float(np.clip(ctx.local_queue / max(controlled_lane_count * 15.0, 1.0), 0.0, 1.0))
+        neighbor_congestion_index = float(np.clip(ctx.neighbor_queue_avg / 60.0, 0.0, 1.0))
+        downstream_blockage_ratio = float(np.clip(ctx.downstream_congestion / 4.0, 0.0, 1.0))
+        queue_growth_rate = float(np.clip(local_queue_delta / 20.0, -1.0, 1.0))
+        corridor_congestion_pressure = float(
+            np.clip((local_congestion_index * 0.4) + (neighbor_congestion_index * 0.25) + (downstream_blockage_ratio * 0.25) + (queue_growth_rate * 0.10), 0.0, 1.0)
+        )
+        network_congestion_score = self._network_congestion_score()
+        congestion_imbalance_ns = float(
+            np.clip(abs(ctx.queues["north"] - ctx.queues["south"]) / max(controlled_lane_count * 6.0, 1.0), 0.0, 1.0)
+        )
+        congestion_imbalance_ew = float(
+            np.clip(abs(ctx.queues["east"] - ctx.queues["west"]) / max(controlled_lane_count * 6.0, 1.0), 0.0, 1.0)
+        )
+        congestion_trend_local = float(np.clip(local_queue_delta / 20.0, -1.0, 1.0))
+        congestion_trend_network = float(np.clip(network_queue_delta / max(len(self._agent_ids) * 10.0, 1.0), -1.0, 1.0))
+        congestion_transfer_risk = float(
+            np.clip((neighbor_congestion_index * 0.35) + (downstream_blockage_ratio * 0.45) + (network_congestion_score * 0.20), 0.0, 1.0)
+        )
+        return {
+            "local_congestion_index": local_congestion_index,
+            "neighbor_congestion_index": neighbor_congestion_index,
+            "downstream_blockage_ratio": downstream_blockage_ratio,
+            "queue_growth_rate": queue_growth_rate,
+            "corridor_congestion_pressure": corridor_congestion_pressure,
+            "network_congestion_score": network_congestion_score,
+            "congestion_imbalance_ns": congestion_imbalance_ns,
+            "congestion_imbalance_ew": congestion_imbalance_ew,
+            "congestion_trend_local": congestion_trend_local,
+            "congestion_trend_network": congestion_trend_network,
+            "congestion_transfer_risk": congestion_transfer_risk,
+        }
+
+    def _log_congestion_snapshot(self, step: int, tl_id: str, features: Dict[str, float]) -> None:
+        if not self.debug_congestion_features:
+            return
+        if step <= 0 or step % 100 != 0:
+            return
+        print("[CONGESTION_DEBUG]")
+        print(f"step={step} tl_id={tl_id}")
+        for key in [
+            "local_congestion_index",
+            "neighbor_congestion_index",
+            "downstream_blockage_ratio",
+            "queue_growth_rate",
+            "corridor_congestion_pressure",
+            "network_congestion_score",
+            "congestion_imbalance_ns",
+            "congestion_imbalance_ew",
+            "congestion_trend_local",
+            "congestion_trend_network",
+            "congestion_transfer_risk",
+        ]:
+            print(f"{key}={features[key]:.4f}")
+
+    def _maybe_warn_inactive_congestion_features(self, done: bool) -> None:
+        if not done or self.controller_type != CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO:
+            return
+        if self._congestion_feature_warning_logged:
+            return
+        if not self._congestion_feature_seen_nonzero:
+            print("[WARNING]")
+            print("Congestion-aware features appear inactive.")
+        self._congestion_feature_warning_logged = True
+
     def _ev_neighbor_eta(self, tl_id: str) -> float:
         neighbors = self._neighbor_map.get(tl_id, [])
         if not neighbors or self.ev_id not in traci.vehicle.getIDList():
@@ -452,7 +835,29 @@ class TrafficEnv:
         route_lanes = route_signal.route_lanes if route_signal is not None else tuple()
         ev_phase = infer_ev_green_phase(tl_id, list(route_lanes))
 
-        return AgentContext(
+        controlled_lane_count = self._controlled_lane_count(tl_id)
+        prev_local_queue = self._prev_agent_queue_totals.get(tl_id, local_queue)
+        prev_network_queue = self._prev_network_queue
+        network_queue = float(self._queue_length_network())
+        local_queue_delta = local_queue - prev_local_queue
+        network_queue_delta = network_queue - prev_network_queue
+        local_congestion_index = float(np.clip(local_queue / max(controlled_lane_count * 15.0, 1.0), 0.0, 1.0))
+        neighbor_congestion_index = float(np.clip(neighbor_queue_avg / 60.0, 0.0, 1.0))
+        downstream_blockage_ratio = float(np.clip(downstream_congestion / 4.0, 0.0, 1.0))
+        queue_growth_rate = float(np.clip(local_queue_delta / 20.0, -1.0, 1.0))
+        corridor_congestion_pressure = float(
+            np.clip((local_congestion_index * 0.4) + (neighbor_congestion_index * 0.25) + (downstream_blockage_ratio * 0.25) + (queue_growth_rate * 0.10), 0.0, 1.0)
+        )
+        network_congestion_score = self._network_congestion_score()
+        congestion_imbalance_ns = float(np.clip(abs(queues["north"] - queues["south"]) / max(controlled_lane_count * 6.0, 1.0), 0.0, 1.0))
+        congestion_imbalance_ew = float(np.clip(abs(queues["east"] - queues["west"]) / max(controlled_lane_count * 6.0, 1.0), 0.0, 1.0))
+        congestion_trend_local = float(np.clip(local_queue_delta / 20.0, -1.0, 1.0))
+        congestion_trend_network = float(np.clip(network_queue_delta / max(len(self._agent_ids) * 10.0, 1.0), -1.0, 1.0))
+        congestion_transfer_risk = float(
+            np.clip((neighbor_congestion_index * 0.35) + (downstream_blockage_ratio * 0.45) + (network_congestion_score * 0.20), 0.0, 1.0)
+        )
+
+        ctx = AgentContext(
             tl_id=tl_id,
             route_lanes=route_lanes,
             ev_phase=ev_phase,
@@ -465,14 +870,47 @@ class TrafficEnv:
             local_density=local_density,
             local_queue=local_queue,
             neighbor_queue_avg=neighbor_queue_avg,
+            neighbor_queue_std=self._neighbor_queue_std(tl_id),
             downstream_congestion=downstream_congestion,
             neighbor_phase_avg=neighbor_phase_avg,
             incoming_traffic_estimate=incoming_traffic_estimate,
             ev_neighbor_eta=ev_neighbor_eta,
             approaching_density=float(local_density) / 40.0,
+            neighbor_waiting_time=self._average_neighbor_waiting_time(tl_id),
+            neighbor_throughput_estimate=self._average_neighbor_throughput(tl_id),
+            downstream_spillback_indicator=float(np.clip(downstream_congestion / 2.0, 0.0, 1.0)),
+            neighbor_emergency_vehicle_present=self._neighbor_emergency_vehicle_present(tl_id),
             ev_relevant=self._ev_relevance(dist),
             on_ev_route=route_signal is not None,
+            local_congestion_index=local_congestion_index,
+            neighbor_congestion_index=neighbor_congestion_index,
+            downstream_blockage_ratio=downstream_blockage_ratio,
+            queue_growth_rate=queue_growth_rate,
+            corridor_congestion_pressure=corridor_congestion_pressure,
+            network_congestion_score=network_congestion_score,
+            congestion_imbalance_ns=congestion_imbalance_ns,
+            congestion_imbalance_ew=congestion_imbalance_ew,
+            congestion_trend_local=congestion_trend_local,
+            congestion_trend_network=congestion_trend_network,
+            congestion_transfer_risk=congestion_transfer_risk,
         )
+        if self.controller_type == CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO:
+            features = [
+                ctx.local_congestion_index,
+                ctx.neighbor_congestion_index,
+                ctx.downstream_blockage_ratio,
+                ctx.queue_growth_rate,
+                ctx.corridor_congestion_pressure,
+                ctx.network_congestion_score,
+                ctx.congestion_imbalance_ns,
+                ctx.congestion_imbalance_ew,
+                ctx.congestion_trend_local,
+                ctx.congestion_trend_network,
+                ctx.congestion_transfer_risk,
+            ]
+            if any(abs(float(value)) > 1e-9 for value in features):
+                self._congestion_feature_seen_nonzero = True
+        return ctx
 
     def _normalize_base_state(self, ctx: AgentContext) -> list[float]:
         speed = traci.vehicle.getSpeed(self.ev_id) if self.ev_id in traci.vehicle.getIDList() else 0.0
@@ -490,8 +928,10 @@ class TrafficEnv:
             float(np.clip(ctx.neighbor_queue_avg / 20.0, 0.0, 1.0)),
         ]
 
-    def _state_from_context(self, ctx: AgentContext) -> np.ndarray:
+    def _state_from_context(self, ctx: AgentContext, global_features: Dict[str, float] | None = None) -> np.ndarray:
         state_values = self._normalize_base_state(ctx)
+        if global_features is None:
+            global_features = self._global_traffic_features()
         if self.coordination_enabled:
             # Coordination features expose only compact neighbor summaries so each
             # intersection can reason about corridor health without a centralized state.
@@ -502,6 +942,41 @@ class TrafficEnv:
                     float(np.clip(ctx.incoming_traffic_estimate, 0.0, 1.0)),
                     float(np.clip(ctx.ev_neighbor_eta, 0.0, 1.0)),
                     float(np.clip(ctx.approaching_density, 0.0, 1.0)),
+                ]
+            )
+        if self.controller_type in {CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
+            state_values.extend(
+                [
+                    float(np.clip(ctx.neighbor_queue_std / 20.0, 0.0, 1.0)),
+                    float(np.clip(ctx.neighbor_congestion_index, 0.0, 1.0)),
+                    float(np.clip(ctx.neighbor_waiting_time / 60.0, 0.0, 1.0)),
+                    float(np.clip(ctx.downstream_spillback_indicator, 0.0, 1.0)),
+                    float(np.clip(ctx.neighbor_throughput_estimate / 20.0, 0.0, 1.0)),
+                    float(np.clip(ctx.neighbor_emergency_vehicle_present, 0.0, 1.0)),
+                    global_features["avg_queue_length"],
+                    global_features["avg_waiting_time"],
+                    global_features["total_network_congestion"],
+                    global_features["throughput"],
+                    global_features["pct_congested_intersections"],
+                    global_features["blocked_approaches"],
+                    global_features["global_traffic_density"],
+                    global_features["ev_network_progress"],
+                ]
+            )
+        if self.controller_type == CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO:
+            state_values.extend(
+                [
+                    ctx.local_congestion_index,
+                    ctx.neighbor_congestion_index,
+                    ctx.downstream_blockage_ratio,
+                    ctx.queue_growth_rate,
+                    ctx.corridor_congestion_pressure,
+                    ctx.network_congestion_score,
+                    ctx.congestion_imbalance_ns,
+                    ctx.congestion_imbalance_ew,
+                    ctx.congestion_trend_local,
+                    ctx.congestion_trend_network,
+                    ctx.congestion_transfer_risk,
                 ]
             )
         return np.asarray(state_values, dtype=np.float32)
@@ -530,9 +1005,10 @@ class TrafficEnv:
 
     def _build_all_states(self) -> Dict[str, np.ndarray]:
         states: Dict[str, np.ndarray] = {}
+        global_features = self._global_traffic_features()
         for tl_id in self._agent_ids:
             ctx = self._build_agent_context(tl_id)
-            state = self._state_from_context(ctx)
+            state = self._state_from_context(ctx, global_features)
             states[tl_id] = state
             self._log_state(tl_id, state, ctx)
         return states
@@ -550,7 +1026,8 @@ class TrafficEnv:
         if signal is None:
             return np.zeros(self.state_dim, dtype=np.float32)
         ctx = self._build_agent_context(signal.tl_id)
-        state = self._state_from_context(ctx)
+        global_features = self._global_traffic_features()
+        state = self._state_from_context(ctx, global_features)
         self._log_state(signal.tl_id, state, ctx)
         return state
 
@@ -574,6 +1051,9 @@ class TrafficEnv:
         self._prev_agent_phases = {tl_id: traci.trafficlight.getPhase(tl_id) for tl_id in self._agent_ids}
         self._last_reward_breakdowns = {}
         self._last_coordination_terms = {}
+        self._last_multi_level_diagnostics = {}
+        self._reset_red_signal_probe_stats()
+        self._reset_adaptive_episode_stats()
         state = self.get_state()
 
         print(
@@ -594,16 +1074,246 @@ class TrafficEnv:
             print("neighbor_congestion -> neighbor queue penalty")
             print("network_congestion -> network-wide congestion penalty")
             print("downstream_blockage -> spillback penalty")
-            print("traffic_stability -> corridor stability penalty")
+            print("traffic_stability -> queue instability penalty")
+            print("congestion_reduction -> reward for reducing congestion")
+            print("queue_stabilization -> reward for stabilizing queues")
+            print("spillback_prevention -> reward for preventing downstream spillback")
+            print("congestion_transfer -> penalty for pushing congestion to neighbors")
+            print("corridor_congestion -> corridor congestion penalty")
+            print("congestion_imbalance -> penalty for imbalance between approaches")
+            print("congestion_trend -> penalty for worsening congestion trend")
             print("anti_gridlock_penalty -> extra penalty when network congestion or queue length crosses threshold")
             print({key: float(value) for key, value in REWARD_WEIGHTS.items()})
             self._reward_weights_logged = True
+        if self.controller_type in {CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
+            print("[MULTI_LEVEL_COORDINATED_PPO_INIT]")
+            print("level_1=local optimization")
+            print("level_2=neighbor coordination")
+            print("level_3=global optimization")
+            print(f"state_dim={self.state_dim}")
+            print(f"action_space={self.action_dim}")
         self._route_debug()
         return state
 
     def _network_congestion_ratio(self) -> float:
         vehicle_count = max(len(traci.vehicle.getIDList()), 1)
         return float(self._queue_length_network()) / float(vehicle_count)
+
+    def _reset_adaptive_episode_stats(self) -> None:
+        self._adaptive_mode_steps = {"low": 0, "medium": 0, "high": 0}
+        self._adaptive_ev_weight_sum = 0.0
+        self._adaptive_network_weight_sum = 0.0
+        self._adaptive_step_count = 0
+        self._adaptive_ev_component_sum = 0.0
+        self._adaptive_network_component_sum = 0.0
+        self._adaptive_congestion_index_sum = 0.0
+        self._last_adaptive_congestion_level = "medium"
+        self._last_adaptive_congestion_index = 0.0
+
+    def _compute_adaptive_congestion_context(self) -> tuple[float, str, float, float]:
+        veh_ids = traci.vehicle.getIDList()
+        veh_count = max(len(veh_ids), 1)
+        queue_len = float(self._queue_length_network())
+        waits = [traci.vehicle.getWaitingTime(v_id) for v_id in veh_ids]
+        avg_wait = float(sum(waits) / len(waits)) if waits else 0.0
+        occupancy = queue_len / float(veh_count)
+
+        queue_norm = float(np.clip(queue_len / 40.0, 0.0, 1.0))
+        wait_norm = float(np.clip(avg_wait / 30.0, 0.0, 1.0))
+        occupancy_norm = float(np.clip(occupancy, 0.0, 1.0))
+        congestion_index = float((0.35 * queue_norm) + (0.35 * wait_norm) + (0.30 * occupancy_norm))
+
+        level = classify_congestion_level(congestion_index)
+        ev_weight, network_weight = adaptive_scales_for_level(level)
+        return congestion_index, level, ev_weight, network_weight
+
+    def _record_adaptive_step(self, congestion_index: float, level: str, ev_weight: float, network_weight: float) -> None:
+        self._adaptive_mode_steps[level] = self._adaptive_mode_steps.get(level, 0) + 1
+        self._adaptive_ev_weight_sum += float(ev_weight)
+        self._adaptive_network_weight_sum += float(network_weight)
+        self._adaptive_congestion_index_sum += float(congestion_index)
+        self._adaptive_step_count += 1
+        self._last_adaptive_congestion_level = level
+        self._last_adaptive_congestion_index = float(congestion_index)
+
+    def _record_adaptive_reward_components(self, breakdown: Dict[str, float]) -> None:
+        self._adaptive_ev_component_sum += float(breakdown.get("_ev_reward_component", 0.0))
+        self._adaptive_network_component_sum += float(breakdown.get("_network_reward_component", 0.0))
+
+    def _reset_red_signal_probe_stats(self) -> None:
+        self._red_signal_probe_samples = {1: 0, 2: 0}
+        self._red_signal_probe_reward_sums = {1: 0.0, 2: 0.0}
+        self._red_signal_probe_move_sums = {1: 0.0, 2: 0.0}
+        self._red_signal_probe_wait_delta_sums = {1: 0.0, 2: 0.0}
+        self._red_signal_probe_speed_delta_sums = {1: 0.0, 2: 0.0}
+        self._red_signal_probe_print_count = 0
+
+    def _is_waiting_at_red(self, distance_before: float, speed_before: float, wait_before: float) -> bool:
+        if distance_before > NEAR_SIGNAL_DISTANCE_THRESHOLD:
+            return False
+        if speed_before >= LOW_SPEED_NEAR_SIGNAL_THRESHOLD:
+            return False
+        if wait_before <= 0.0:
+            return False
+        return True
+
+    def _record_red_signal_probe(
+        self,
+        *,
+        tl_id: str,
+        ctx: AgentContext,
+        current_phase: int,
+        requested_action: int,
+        applied_action: int,
+        speed_before: float,
+        speed_after: float,
+        wait_before: float,
+        wait_after: float,
+        distance_before: float,
+        distance_after: float,
+        rewards: Dict[str, float],
+        breakdown: Dict[str, float],
+    ) -> Dict[str, float | int | str] | None:
+        if requested_action not in {1, 2}:
+            return None
+        if current_phase == ctx.ev_phase:
+            return None
+        if not self._is_waiting_at_red(distance_before, speed_before, wait_before):
+            return None
+
+        action = int(requested_action)
+        moved_m = max(0.0, float(distance_before) - float(distance_after))
+        wait_delta = float(wait_after) - float(wait_before)
+        speed_delta = float(speed_after) - float(speed_before)
+        reward_total = float(rewards.get(tl_id, 0.0))
+        local_reward = float(
+            breakdown.get("ev_delay_penalty", 0.0)
+            + breakdown.get("ev_stop_penalty", 0.0)
+            + breakdown.get("low_speed_penalty", 0.0)
+            + breakdown.get("queue_penalty", 0.0)
+            + breakdown.get("queue_growth_penalty", 0.0)
+            + breakdown.get("throughput_reward", 0.0)
+            + breakdown.get("switch_penalty", 0.0)
+            + breakdown.get("intersection_clear_reward", 0.0)
+            + breakdown.get("anti_gridlock_penalty", 0.0)
+        )
+        neighbor_reward = float(
+            breakdown.get("neighbor_congestion_penalty", 0.0)
+            + breakdown.get("downstream_blockage_penalty", 0.0)
+            + breakdown.get("traffic_stability_penalty", 0.0)
+            + breakdown.get("corridor_flow_reward", 0.0)
+            + breakdown.get("congestion_transfer_penalty", 0.0)
+            + breakdown.get("corridor_congestion_penalty", 0.0)
+            + breakdown.get("congestion_imbalance_penalty", 0.0)
+            + breakdown.get("congestion_trend_penalty", 0.0)
+        )
+        global_reward = float(
+            breakdown.get("network_congestion_penalty", 0.0)
+            + breakdown.get("congestion_reduction_reward", 0.0)
+            + breakdown.get("queue_stabilization_reward", 0.0)
+            + breakdown.get("spillback_prevention_reward", 0.0)
+        )
+
+        self._red_signal_probe_samples[action] = self._red_signal_probe_samples.get(action, 0) + 1
+        self._red_signal_probe_reward_sums[action] = self._red_signal_probe_reward_sums.get(action, 0.0) + reward_total
+        self._red_signal_probe_move_sums[action] = self._red_signal_probe_move_sums.get(action, 0.0) + moved_m
+        self._red_signal_probe_wait_delta_sums[action] = self._red_signal_probe_wait_delta_sums.get(action, 0.0) + wait_delta
+        self._red_signal_probe_speed_delta_sums[action] = self._red_signal_probe_speed_delta_sums.get(action, 0.0) + speed_delta
+
+        probe = {
+            "tl_id": tl_id,
+            "current_phase": int(current_phase),
+            "required_ev_phase": int(ctx.ev_phase),
+            "requested_action": int(requested_action),
+            "applied_action": int(applied_action),
+            "action_label": "action_1_switch_to_ev_green" if action == 1 else "action_2_extend_green",
+            "ev_distance_before": float(distance_before),
+            "ev_distance_after": float(distance_after),
+            "ev_speed_before": float(speed_before),
+            "ev_speed_after": float(speed_after),
+            "ev_wait_before": float(wait_before),
+            "ev_wait_after": float(wait_after),
+            "ev_move_m": float(moved_m),
+            "ev_wait_delta": float(wait_delta),
+            "ev_speed_delta": float(speed_delta),
+            "step_index": int(self._episode_steps),
+            "reward_total": reward_total,
+            "local_reward": local_reward,
+            "neighbor_reward": neighbor_reward,
+            "global_reward": global_reward,
+            "switch_penalty": float(breakdown.get("switch_penalty", 0.0)),
+            "intersection_clear_reward": float(breakdown.get("intersection_clear_reward", 0.0)),
+            "queue_penalty": float(breakdown.get("queue_penalty", 0.0)),
+            "network_congestion_penalty": float(breakdown.get("network_congestion_penalty", 0.0)),
+            "downstream_blockage_penalty": float(breakdown.get("downstream_blockage_penalty", 0.0)),
+        }
+
+        if self._red_signal_probe_print_count < 40 or self._red_signal_probe_print_count % 50 == 0:
+            print(
+                "[RED_SIGNAL_PROBE] "
+                f"agent={tl_id} phase={current_phase} ev_phase={ctx.ev_phase} "
+                f"req={requested_action} appl={applied_action} "
+                f"speed_before={speed_before:.2f} speed_after={speed_after:.2f} "
+                f"wait_before={wait_before:.1f} wait_after={wait_after:.1f} "
+                f"move_m={moved_m:.2f} reward={reward_total:.3f} "
+                f"local={local_reward:.3f} neighbor={neighbor_reward:.3f} global={global_reward:.3f}"
+            )
+        self._red_signal_probe_print_count += 1
+        return probe
+
+    def get_red_signal_probe_diagnostics(self) -> Dict[str, Dict[str, float]]:
+        diagnostics: Dict[str, Dict[str, float]] = {}
+        for action in (1, 2):
+            samples = max(self._red_signal_probe_samples.get(action, 0), 1)
+            diagnostics[str(action)] = {
+                "samples": float(self._red_signal_probe_samples.get(action, 0)),
+                "avg_reward": float(self._red_signal_probe_reward_sums.get(action, 0.0) / samples),
+                "avg_move_m": float(self._red_signal_probe_move_sums.get(action, 0.0) / samples),
+                "avg_wait_delta": float(self._red_signal_probe_wait_delta_sums.get(action, 0.0) / samples),
+                "avg_speed_delta": float(self._red_signal_probe_speed_delta_sums.get(action, 0.0) / samples),
+            }
+        return diagnostics
+
+    def get_adaptive_episode_diagnostics(self) -> Dict[str, float | str]:
+        steps = max(self._adaptive_step_count, 1)
+        total_mode_steps = sum(self._adaptive_mode_steps.values()) or 1
+        dominant_level = max(self._adaptive_mode_steps, key=self._adaptive_mode_steps.get)
+        return {
+            "congestion_level": dominant_level,
+            "last_congestion_level": self._last_adaptive_congestion_level,
+            "avg_congestion_index": float(self._adaptive_congestion_index_sum / steps),
+            "adaptive_ev_weight": float(self._adaptive_ev_weight_sum / steps),
+            "adaptive_network_weight": float(self._adaptive_network_weight_sum / steps),
+            "ev_reward_component": float(self._adaptive_ev_component_sum),
+            "network_reward_component": float(self._adaptive_network_component_sum),
+            "pct_low_congestion": float(100.0 * self._adaptive_mode_steps["low"] / total_mode_steps),
+            "pct_medium_congestion": float(100.0 * self._adaptive_mode_steps["medium"] / total_mode_steps),
+            "pct_high_congestion": float(100.0 * self._adaptive_mode_steps["high"] / total_mode_steps),
+        }
+
+    def get_multi_level_episode_diagnostics(self) -> Dict[str, float]:
+        if not self._last_multi_level_diagnostics:
+            return {}
+        steps = max(len(self._last_multi_level_diagnostics), 1)
+        totals: Dict[str, float] = {
+            "local_reward_contribution": 0.0,
+            "neighbor_coordination_contribution": 0.0,
+            "global_optimization_contribution": 0.0,
+            "average_neighbor_congestion": 0.0,
+            "average_global_congestion": 0.0,
+            "average_neighbor_waiting_time": 0.0,
+            "state_dim": float(self.state_dim),
+        }
+        for diagnostics in self._last_multi_level_diagnostics.values():
+            for key in totals:
+                if key == "state_dim":
+                    continue
+                totals[key] += float(diagnostics.get(key, 0.0))
+        for key in totals:
+            if key != "state_dim":
+                totals[key] /= steps
+        return totals
+
 
     def _corridor_flow_score(self, ctx: AgentContext) -> float:
         queue_relief = max(0.0, 1.0 - np.clip(ctx.local_queue / 20.0, 0.0, 1.0))
@@ -648,9 +1358,27 @@ class TrafficEnv:
         rewards: Dict[str, float] = {}
         self._last_reward_breakdowns = {}
         self._last_coordination_terms = {}
+        self._last_congestion_features = {}
+
+        adaptive_scales: tuple[float, float] | None = None
+        adaptive_level = "medium"
+        adaptive_index = 0.0
+        if self.adaptive_reward_enabled:
+            adaptive_index, adaptive_level, ev_weight, network_weight = self._compute_adaptive_congestion_context()
+            adaptive_scales = (ev_weight, network_weight)
+            self._record_adaptive_step(adaptive_index, adaptive_level, ev_weight, network_weight)
+            self._last_adaptive_reward_info = {
+                "congestion_index": adaptive_index,
+                "congestion_level": adaptive_level,
+                "adaptive_ev_weight": ev_weight,
+                "adaptive_network_weight": network_weight,
+            }
+        else:
+            self._last_adaptive_reward_info = {}
 
         for tl_id in self._agent_ids:
             ctx = self._build_agent_context(tl_id)
+            congestion_features = self._congestion_feature_snapshot(tl_id, ctx)
             local_queue = ctx.local_queue
             prev_local_queue = self._prev_agent_queue_totals.get(tl_id, local_queue)
             queue_growth = max(0.0, local_queue - prev_local_queue)
@@ -667,6 +1395,20 @@ class TrafficEnv:
 
             clear_bonus = self.intersection_clear_bonus if tl_id in (passed_now - previous_passed) else 0.0
             throughput_share = throughput / max(len(self._agent_ids), 1)
+            congestion_reduction = float(
+                np.clip(
+                    (max(0.0, prev_local_queue - local_queue) / max(prev_local_queue, 1.0))
+                    + (max(0.0, self._prev_network_queue - queue_len) / max(self._prev_network_queue, 1.0)),
+                    0.0,
+                    1.0,
+                )
+            )
+            queue_stabilization = float(np.clip(1.0 - abs(congestion_features["queue_growth_rate"]), 0.0, 1.0))
+            spillback_prevention = float(np.clip(1.0 - congestion_features["downstream_blockage_ratio"], 0.0, 1.0))
+            congestion_transfer = congestion_features["congestion_transfer_risk"]
+            corridor_congestion = congestion_features["corridor_congestion_pressure"]
+            congestion_imbalance = float(np.clip((congestion_features["congestion_imbalance_ns"] + congestion_features["congestion_imbalance_ew"]) / 2.0, 0.0, 1.0))
+            congestion_trend = float(np.clip(max(0.0, (congestion_features["congestion_trend_local"] + congestion_features["congestion_trend_network"]) / 2.0), 0.0, 1.0))
 
             metrics = {
                 "ev_waiting_time": delta_wait * max(ctx.ev_relevant, 0.25 if ctx.on_ev_route else 0.0),
@@ -680,8 +1422,15 @@ class TrafficEnv:
                 "neighbor_congestion": ctx.neighbor_queue_avg,
                 "network_congestion": queue_len / max(len(traci.vehicle.getIDList()), 1),
                 "corridor_flow": 0.0,
-                "downstream_blockage": 0.0,
-                "traffic_stability": 0.0,
+                "downstream_blockage": congestion_features["downstream_blockage_ratio"],
+                "traffic_stability": congestion_features["queue_growth_rate"],
+                "congestion_reduction": congestion_reduction,
+                "queue_stabilization": queue_stabilization,
+                "spillback_prevention": spillback_prevention,
+                "congestion_transfer": congestion_transfer,
+                "corridor_congestion": corridor_congestion,
+                "congestion_imbalance": congestion_imbalance,
+                "congestion_trend": congestion_trend,
             }
             coordination_terms = self._coordination_terms(ctx, switch_event) if self.coordination_enabled else {
                 "network_congestion": 0.0,
@@ -691,10 +1440,25 @@ class TrafficEnv:
             }
             metrics.update(coordination_terms)
 
-            reward, breakdown = compute_reward(metrics)
+            reward, breakdown = compute_reward(metrics, adaptive_scales=adaptive_scales)
+            if self.adaptive_reward_enabled:
+                self._record_adaptive_reward_components(breakdown)
             rewards[tl_id] = reward
             self._last_reward_breakdowns[tl_id] = breakdown
             self._last_coordination_terms[tl_id] = coordination_terms
+            self._last_congestion_features[tl_id] = congestion_features
+            if self.controller_type in {CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
+                multi_level = self._multi_level_reward_contributions(breakdown)
+                global_features = self._global_traffic_features()
+                multi_level.update(
+                    {
+                        "average_neighbor_congestion": float(ctx.neighbor_queue_avg / 20.0),
+                        "average_global_congestion": float(global_features["total_network_congestion"]),
+                        "average_neighbor_waiting_time": float(ctx.neighbor_waiting_time / 60.0),
+                        "state_dim": float(self.state_dim),
+                    }
+                )
+                self._last_multi_level_diagnostics[tl_id] = multi_level
 
             self._reward_debug_counter += 1
             if self._reward_debug_counter <= 16 or self._reward_debug_counter % 60 == 0:
@@ -702,7 +1466,7 @@ class TrafficEnv:
                     f"[RL_REWARD] agent={tl_id} action={actions.get(tl_id, 0)} local_queue={local_queue:.1f} "
                     f"neighbor_queue={ctx.neighbor_queue_avg:.2f} downstream={ctx.downstream_congestion:.2f} "
                     f"incoming={ctx.incoming_traffic_estimate:.2f} reward={reward:.3f} "
-                    f"coord={coordination_terms} breakdown={breakdown}"
+                    f"congestion={congestion_features} coord={coordination_terms} breakdown={breakdown}"
                 )
 
         self._prev_network_queue = queue_len
@@ -723,27 +1487,43 @@ class TrafficEnv:
             raise RuntimeError("Call reset() before step().")
 
         self._route_debug()
-        previous_progress = route_progress_for_vehicle(self.ev_id, self._route_signals) if self.ev_id in traci.vehicle.getIDList() else None
+        ev_present_before = self.ev_id in traci.vehicle.getIDList()
+        ev_speed_before = traci.vehicle.getSpeed(self.ev_id) if ev_present_before else 0.0
+        ev_wait_before = traci.vehicle.getWaitingTime(self.ev_id) if ev_present_before else 0.0
+        previous_progress = route_progress_for_vehicle(self.ev_id, self._route_signals) if ev_present_before else None
         previous_passed = {signal.tl_id for signal in previous_progress.passed} if previous_progress is not None else set()
 
         action_log: Dict[str, Dict[str, float]] = {}
+        action_trace: Dict[str, Dict[str, float]] = {}
+        red_signal_probes: list[Dict[str, float | int | str]] = []
+        ev_distance_before_map: Dict[str, float] = {}
+        phase_before_map = {tl_id: float(traci.trafficlight.getPhase(tl_id)) for tl_id in self._agent_ids}
         for tl_id in self._agent_ids:
             ctx = self._build_agent_context(tl_id)
-            action = int(actions.get(tl_id, 0))
+            ev_distance_before_map[tl_id] = float(ctx.ev_distance)
+            requested_action = int(actions.get(tl_id, 0))
+            applied_action = requested_action
 
             # Coordinated MARL becomes conservative when the downstream corridor is
             # already saturated, which helps reduce spillback and oscillations.
-            if self.coordination_enabled and ctx.downstream_congestion >= 1.0 and action == 2:
-                action = 0
-            apply_discrete_rl_action(tl_id, action, ctx.ev_phase, ctx.ev_distance)
+            if self.coordination_enabled and ctx.downstream_congestion >= 1.0 and applied_action == 2:
+                applied_action = 0
+            apply_discrete_rl_action(tl_id, applied_action, ctx.ev_phase, ctx.ev_distance)
             action_log[tl_id] = {
-                "action": float(action),
+                "action": float(applied_action),
+                "requested_action": float(requested_action),
                 "local_queue": ctx.local_queue,
                 "neighbor_queue": ctx.neighbor_queue_avg,
                 "downstream_congestion": ctx.downstream_congestion,
                 "incoming_traffic_estimate": ctx.incoming_traffic_estimate,
             }
-            actions[tl_id] = action
+            action_trace[tl_id] = {
+                "requested_action": float(requested_action),
+                "applied_action": float(applied_action),
+                "phase_before": phase_before_map.get(tl_id, float("nan")),
+                "phase_after": float("nan"),
+            }
+            actions[tl_id] = applied_action
 
         print(f"[RL_ACTION] active_agents={len(self._agent_ids)} actions={action_log}")
 
@@ -755,14 +1535,50 @@ class TrafficEnv:
             return zero_states, zero_rewards, True, {"error": "traci_closed"}
 
         self._episode_steps += 1
+        if self.controller_type == CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO and self._agent_ids:
+            sample_tl = self._agent_ids[0]
+            sample_ctx = self._build_agent_context(sample_tl)
+            self._log_congestion_snapshot(self._episode_steps, sample_tl, self._congestion_feature_snapshot(sample_tl, sample_ctx))
         rewards = self._compute_agent_rewards(actions, previous_passed)
         next_states = self.get_state()
         done = self._done()
+        self._maybe_warn_inactive_congestion_features(done)
+        ev_present_after = self.ev_id in traci.vehicle.getIDList()
+        ev_speed_after = traci.vehicle.getSpeed(self.ev_id) if ev_present_after else ev_speed_before
+        ev_wait_after = traci.vehicle.getWaitingTime(self.ev_id) if ev_present_after else ev_wait_before
+        ev_distance_after_map = {tl_id: (self._distance_to_tl(tl_id) if ev_present_after else ev_distance_before_map.get(tl_id, 0.0)) for tl_id in self._agent_ids}
+        for tl_id in self._agent_ids:
+            if tl_id in action_trace:
+                action_trace[tl_id]["phase_after"] = float(traci.trafficlight.getPhase(tl_id))
+            probe = self._record_red_signal_probe(
+                tl_id=tl_id,
+                ctx=self._build_agent_context(tl_id),
+                current_phase=int(action_trace[tl_id]["phase_before"]) if tl_id in action_trace else int(traci.trafficlight.getPhase(tl_id)),
+                requested_action=int(action_trace[tl_id]["requested_action"]) if tl_id in action_trace else 0,
+                applied_action=int(action_trace[tl_id]["applied_action"]) if tl_id in action_trace else 0,
+                speed_before=ev_speed_before,
+                speed_after=ev_speed_after,
+                wait_before=ev_wait_before,
+                wait_after=ev_wait_after,
+                distance_before=ev_distance_before_map.get(tl_id, 0.0),
+                distance_after=ev_distance_after_map.get(tl_id, ev_distance_before_map.get(tl_id, 0.0)),
+                rewards=rewards,
+                breakdown=self._last_reward_breakdowns.get(tl_id, {}),
+            )
+            if probe is not None:
+                red_signal_probes.append(probe)
         info = {
             "active_intersections": list(self._agent_ids),
             "reward_breakdowns": self._last_reward_breakdowns,
             "coordination_terms": self._last_coordination_terms,
+            "congestion_metrics": self._last_congestion_features,
+            "action_trace": action_trace,
+            "red_signal_probes": red_signal_probes,
         }
+        if self.controller_type in {CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
+            info["multi_level_diagnostics"] = dict(self._last_multi_level_diagnostics)
+        if self.adaptive_reward_enabled:
+            info["adaptive_reward"] = dict(self._last_adaptive_reward_info)
         return next_states, rewards, done, info
 
     def _step_single(self, action: int) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
@@ -773,22 +1589,34 @@ class TrafficEnv:
         info: Dict[str, Any] = {}
         clear_bonus = 0.0
         switch_event = 0.0
+        action_trace: Dict[str, Dict[str, float]] = {}
 
         if self.ev_id in traci.vehicle.getIDList():
             self._route_debug()
             focus_signal = self._nearest_signal_ahead()
             self._focus_tl = focus_signal.tl_id if focus_signal else None
             if focus_signal is not None:
+                requested_action = int(action)
                 current_phase = traci.trafficlight.getPhase(focus_signal.tl_id)
                 if self._prev_phase_idx is not None and current_phase != self._prev_phase_idx:
                     switch_event = 1.0
                 dist = signal_distance(self.ev_id, focus_signal)
                 ev_phase = infer_ev_green_phase(focus_signal.tl_id, list(focus_signal.route_lanes))
-                apply_discrete_rl_action(focus_signal.tl_id, int(action), ev_phase, dist)
+                applied_action = requested_action
+                apply_discrete_rl_action(focus_signal.tl_id, applied_action, ev_phase, dist)
                 self._prev_phase_idx = traci.trafficlight.getPhase(focus_signal.tl_id)
-                print(f"[RL_ACTION] agent={focus_signal.tl_id} action={action}")
+                action_trace[focus_signal.tl_id] = {
+                    "requested_action": float(requested_action),
+                    "applied_action": float(applied_action),
+                    "phase_before": float(current_phase),
+                    "phase_after": float(self._prev_phase_idx),
+                }
+                print(f"[RL_ACTION] agent={focus_signal.tl_id} action={applied_action}")
             else:
                 self._prev_phase_idx = None
+
+        if self.controller_type == CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO and self._focus_tl is not None:
+            info["congestion_metrics"] = self._congestion_feature_snapshot(self._focus_tl, self._build_agent_context(self._focus_tl))
 
         previous_progress = route_progress_for_vehicle(self.ev_id, self._route_signals) if self.ev_id in traci.vehicle.getIDList() else None
         previous_passed = {signal.tl_id for signal in previous_progress.passed} if previous_progress is not None else set()
@@ -799,6 +1627,10 @@ class TrafficEnv:
             return np.zeros(self.state_dim, dtype=np.float32), 0.0, True, {"error": "traci_closed"}
 
         self._episode_steps += 1
+        if self.controller_type == CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO and self._agent_ids:
+            sample_tl = self._agent_ids[0]
+            sample_ctx = self._build_agent_context(sample_tl)
+            self._log_congestion_snapshot(self._episode_steps, sample_tl, self._congestion_feature_snapshot(sample_tl, sample_ctx))
         ev_present = self.ev_id in traci.vehicle.getIDList()
         progress = route_progress_for_vehicle(self.ev_id, self._route_signals) if ev_present else None
         passed_now = {signal.tl_id for signal in progress.passed} if progress is not None else set()
@@ -857,7 +1689,10 @@ class TrafficEnv:
         if traci.simulation.getMinExpectedNumber() == 0 and not ev_present:
             done = True
 
+        self._maybe_warn_inactive_congestion_features(done)
         next_state = self.get_state()
+        if action_trace:
+            info["action_trace"] = action_trace
         return next_state, float(reward), done, info  # type: ignore[return-value]
 
     def step(
@@ -871,3 +1706,4 @@ class TrafficEnv:
         if isinstance(action, dict):
             raise TypeError("Single-agent environment expects a scalar action.")
         return self._step_single(action)
+

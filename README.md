@@ -50,6 +50,30 @@ Train RL:
 python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --episodes 200
 ```
 
+Train congestion-aware coordinated PPO:
+
+```bash
+python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type congestion_aware_coordinated_ppo --episodes 200 --max-steps 3600
+```
+
+Run congestion-aware coordinated PPO:
+
+```bash
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode congestion_aware_coordinated_ppo --congestion-aware-coordinated-ppo-model-path outputs/models/congestion_aware_coordinated_ppo.pt
+```
+
+Train multi-level coordinated PPO:
+
+```bash
+python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type multi_level_coordinated_ppo --episodes 200 --max-steps 3600
+```
+
+Run multi-level coordinated PPO:
+
+```bash
+python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode multi_level_coordinated_ppo --multi-level-coordinated-ppo-model-path outputs/models/multi_level_coordinated_ppo.pt --ev-id ev_2
+```
+
 ## Testing Different EV Routes
 
 Run against the predefined emergency vehicles:
@@ -68,3 +92,6 @@ You can also edit the EV route in `scenario/grid/grid_routes.rou.xml` and rerun 
 - RL mode now keeps the simulation alive briefly after the EV exits, just like the rule-based mode.
 - The current controller is route-aware and works for horizontal, vertical, and turning EV paths on the grid.
 - If you change the reward function or state representation, retrain the RL model before evaluating it.
+- The congestion-aware coordinated PPO uses a larger state vector than the original coordinated PPO, so its checkpoint is separate from `outputs/models/coordinated_ppo.pt`.
+- The multi-level coordinated PPO uses an expanded 29-dimensional observation that combines local, neighbor, and global traffic features, so its checkpoint is separate from all earlier PPO checkpoints.
+- Its default checkpoint is `outputs/models/multi_level_coordinated_ppo.pt` and its training log is `outputs/logs/multi_level_coordinated_ppo_training.csv`.

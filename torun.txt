@@ -60,4 +60,20 @@ test: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode global_ppo 
 
 Co ordinated PPO
 train: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type coordinated_ppo --ev-id ev_2 --episodes 200 --max-steps 3600
+train: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type congestion_aware_coordinated_ppo --ev-id ev_2 --episodes 200 --max-steps 3600
 test: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode coordinated_ppo --coordinated-ppo-model-path outputs/models/coordinated_ppo.pt --ev-id ev_2
+test: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode congestion_aware_coordinated_ppo --congestion-aware-coordinated-ppo-model-path outputs/models/congestion_aware_coordinated_ppo.pt --ev-id ev_2
+
+Adaptive reward
+python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type adaptive_reward_coordinated_ppo --ev-id ev_2 --episodes 200 --max-steps 3600
+evaluate: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode adaptive_reward_coordinated_ppo --adaptive-reward-coordinated-ppo-model-path outputs/models/adaptive_reward_coordinated_ppo.pt --ev-id ev_2
+
+Multi-level coordinated PPO
+train: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type multi_level_coordinated_ppo --ev-id ev_2 --episodes 200 --max-steps 3600 --reward-log outputs/logs/multi_level_coordinated_ppo_training.csv
+test: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode multi_level_coordinated_ppo --multi-level-coordinated-ppo-model-path outputs/models/multi_level_coordinated_ppo.pt --ev-id ev_2
+
+
+Multi Level Cordinated DQN
+train: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type multi_level_coordinated_dqn --episodes 80 --ev-id ev_2 
+resume training: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type multi_level_coordinated_dqn --resume-from outputs/models/multi_level_coordinated_dqn.pt --model-out outputs/models/multi_level_coordinated_dqn.pt --episodes 80 --max-steps 3600 --traffic-scale 1.0
+test: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode multi_level_coordinated_dqn --multi-level-coordinated-dqn-model-path outputs/models/multi_level_coordinated_dqn.pt --max-steps 7200 --traffic-scale 1.0 --ev-id ev_2 

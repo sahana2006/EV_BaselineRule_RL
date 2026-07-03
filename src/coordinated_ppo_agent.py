@@ -96,8 +96,19 @@ class CoordinatedPPOAgent:
         states: Mapping[str, np.ndarray],
         *,
         deterministic: bool = False,
-    ) -> tuple[Dict[str, int], Dict[str, float], Dict[str, float], Dict[str, float]]:
+        include_probs: bool = False,
+    ) -> tuple[Dict[str, int], Dict[str, float], Dict[str, float], Dict[str, float]] | tuple[
+        Dict[str, int],
+        Dict[str, float],
+        Dict[str, float],
+        Dict[str, float],
+        Dict[str, float],
+        Dict[str, float],
+    ]:
         if not states:
+            empty: Dict[str, float] = {}
+            if include_probs:
+                return {}, {}, {}, {}, empty, empty
             return {}, {}, {}, {}
 
         agent_ids = sorted(states.keys())
@@ -112,11 +123,18 @@ class CoordinatedPPOAgent:
                 actions = dist.sample()
             log_probs = dist.log_prob(actions)
             entropies = dist.entropy()
+            probs = dist.probs
+            selected_probs = probs.gather(1, actions.unsqueeze(-1)).squeeze(-1)
+            max_probs, _ = probs.max(dim=-1)
 
         action_map = {agent_id: int(actions[idx].item()) for idx, agent_id in enumerate(agent_ids)}
         log_prob_map = {agent_id: float(log_probs[idx].item()) for idx, agent_id in enumerate(agent_ids)}
         value_map = {agent_id: float(values[idx].item()) for idx, agent_id in enumerate(agent_ids)}
         entropy_map = {agent_id: float(entropies[idx].item()) for idx, agent_id in enumerate(agent_ids)}
+        if include_probs:
+            selected_prob_map = {agent_id: float(selected_probs[idx].item()) for idx, agent_id in enumerate(agent_ids)}
+            max_prob_map = {agent_id: float(max_probs[idx].item()) for idx, agent_id in enumerate(agent_ids)}
+            return action_map, log_prob_map, value_map, entropy_map, selected_prob_map, max_prob_map
         return action_map, log_prob_map, value_map, entropy_map
 
     def predict_actions(self, states: Mapping[str, np.ndarray]) -> Dict[str, int]:
@@ -190,6 +208,12 @@ class CoordinatedPPOAgent:
         policy_loss_total = 0.0
         value_loss_total = 0.0
         entropy_total = 0.0
+        selected_prob_total = 0.0
+        max_prob_total = 0.0
+        approx_kl_total = 0.0
+        clip_fraction_total = 0.0
+        ratio_total = 0.0
+        ratio_sq_total = 0.0
         sample_total = 0
         update_total = 0
 
@@ -209,6 +233,7 @@ class CoordinatedPPOAgent:
                 entropy = dist.entropy().mean()
                 values_pred = self.critic(batch_states)
                 ratio = torch.exp(new_log_probs - batch_old_log_probs)
+                clipped_mask = torch.abs(ratio - 1.0) > self.hyperparams.clip_eps
                 unclipped = ratio * batch_advantages
                 clipped = torch.clamp(
                     ratio,
@@ -227,6 +252,9 @@ class CoordinatedPPOAgent:
                 value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
 
                 loss = policy_loss + self.hyperparams.value_coef * value_loss - self.hyperparams.entropy_coef * entropy
+                selected_probs = dist.probs.gather(1, batch_actions.unsqueeze(-1)).squeeze(-1)
+                max_probs, _ = dist.probs.max(dim=-1)
+                approx_kl = (batch_old_log_probs - new_log_probs).mean()
 
                 self.actor_optimizer.zero_grad()
                 self.critic_optimizer.zero_grad()
@@ -240,6 +268,13 @@ class CoordinatedPPOAgent:
                 policy_loss_total += float(policy_loss.item()) * batch_size_actual
                 value_loss_total += float(value_loss.item()) * batch_size_actual
                 entropy_total += float(entropy.item()) * batch_size_actual
+                selected_prob_total += float(selected_probs.mean().item()) * batch_size_actual
+                max_prob_total += float(max_probs.mean().item()) * batch_size_actual
+                approx_kl_total += float(approx_kl.item()) * batch_size_actual
+                clip_fraction_total += float(clipped_mask.float().mean().item()) * batch_size_actual
+                ratio_mean = float(ratio.mean().item())
+                ratio_total += ratio_mean * batch_size_actual
+                ratio_sq_total += float(ratio.pow(2).mean().item()) * batch_size_actual
                 sample_total += batch_size_actual
                 update_total += 1
 
@@ -249,6 +284,12 @@ class CoordinatedPPOAgent:
             "adv_std": adv_std,
             "samples": float(sample_total),
             "updates": float(update_total),
+            "selected_prob_mean": selected_prob_total / sample_total,
+            "max_prob_mean": max_prob_total / sample_total,
+            "approx_kl": approx_kl_total / sample_total,
+            "clip_fraction": clip_fraction_total / sample_total,
+            "ratio_mean": ratio_total / sample_total,
+            "ratio_std": float(max(ratio_sq_total / sample_total - (ratio_total / sample_total) ** 2, 0.0) ** 0.5),
         }
         return (
             policy_loss_total / sample_total,
@@ -257,7 +298,7 @@ class CoordinatedPPOAgent:
             diagnostics,
         )
 
-    def save(self, path: str | Path) -> None:
+    def save(self, path: str | Path, *, controller_type: str = "coordinated_ppo") -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(
@@ -269,7 +310,7 @@ class CoordinatedPPOAgent:
                 "state_dim": self.state_dim,
                 "action_dim": self.action_dim,
                 "hyperparams": self.hyperparams.__dict__,
-                "controller_type": "coordinated_ppo",
+                "controller_type": controller_type,
                 "shared_policy": True,
             },
             path,
