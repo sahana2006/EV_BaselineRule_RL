@@ -77,3 +77,23 @@ Multi Level Cordinated DQN
 train: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type multi_level_coordinated_dqn --episodes 80 --ev-id ev_2 
 resume training: python src/train_rl.py --sumocfg scenario/grid/grid.sumocfg --controller-type multi_level_coordinated_dqn --resume-from outputs/models/multi_level_coordinated_dqn.pt --model-out outputs/models/multi_level_coordinated_dqn.pt --episodes 80 --max-steps 3600 --traffic-scale 1.0
 test: python src/main.py --sumocfg scenario/grid/grid.sumocfg --mode multi_level_coordinated_dqn --multi-level-coordinated-dqn-model-path outputs/models/multi_level_coordinated_dqn.pt --max-steps 7200 --traffic-scale 1.0 --ev-id ev_2 
+
+
+# Grid 7x28
+# Generate the new scenario once:
+python scenario/grid_7x28/generate_grid_7x28.py
+
+# Rule-based evaluation (full-baseline)
+python src/main.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --mode full_model --headless --ev-id ev_3 --output-root outputs/grid_7x28/rule_based/eval
+
+# Global DQN train/test
+python src/train_rl.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --controller-type single_agent --ev-id ev_3 --episodes 80 --output-root outputs/grid_7x28/global_dqn/train
+python src/main.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --mode rl_model --model-path outputs/grid_7x28/global_dqn/train/checkpoints/latest.pt --ev-id ev_3 --output-root outputs/grid_7x28/global_dqn/eval
+
+# Coordinated DQN MARL train/test
+python src/train_rl.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --controller-type coordinated_marl --ev-id ev_3 --episodes 80 --output-root outputs/grid_7x28/coordinated_marl/train
+python src/main.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --mode coordinated_marl_model --coordinated-marl-model-path outputs/grid_7x28/coordinated_marl/train/checkpoints/latest.pt --headless --ev-id ev_3 --output-root outputs/grid_7x28/coordinated_marl/eval
+
+# Multi-Level Coordinated DQN train/test
+python src/train_rl.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --controller-type multi_level_coordinated_dqn --ev-id ev_3 --episodes 80 --output-root outputs/grid_7x28/multi_level_coordinated_dqn/train
+python src/main.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --mode multi_level_coordinated_dqn --multi-level-coordinated-dqn-model-path outputs/grid_7x28/multi_level_coordinated_dqn/train/checkpoints/latest.pt --headless --ev-id ev_3 --output-root outputs/grid_7x28/multi_level_coordinated_dqn/eval

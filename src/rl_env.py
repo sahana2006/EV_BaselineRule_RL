@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -202,6 +203,39 @@ def compute_reward(
     return total, components
 
 
+def complete_reward_metrics(metrics: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Fill any missing reward inputs with 0.0 so controller-specific paths can
+    safely call compute_reward() before every metric is available.
+    """
+    complete: Dict[str, float] = {
+        "ev_waiting_time": 0.0,
+        "queue_length": 0.0,
+        "queue_growth": 0.0,
+        "ev_stops": 0.0,
+        "low_speed_near_signal": 0.0,
+        "throughput": 0.0,
+        "signal_switch": 0.0,
+        "intersection_clear": 0.0,
+        "neighbor_congestion": 0.0,
+        "network_congestion": 0.0,
+        "corridor_flow": 0.0,
+        "downstream_blockage": 0.0,
+        "traffic_stability": 0.0,
+        "congestion_reduction": 0.0,
+        "queue_stabilization": 0.0,
+        "spillback_prevention": 0.0,
+        "congestion_transfer": 0.0,
+        "corridor_congestion": 0.0,
+        "congestion_imbalance": 0.0,
+        "congestion_trend": 0.0,
+    }
+    for key, value in metrics.items():
+        if key in complete:
+            complete[key] = float(value)
+    return complete
+
+
 def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
@@ -277,6 +311,32 @@ class AgentContext:
     congestion_transfer_risk: float
 
 
+@dataclass
+class StepCache:
+    sim_time: float
+    vehicle_ids: tuple[str, ...]
+    vehicle_set: set[str]
+    vehicle_positions: Dict[str, tuple[float, float]]
+    vehicle_speeds: Dict[str, float]
+    vehicle_waiting_times: Dict[str, float]
+    queue_length_network: int
+    throughput: float
+    ev_present: bool
+    ev_position: tuple[float, float] | None
+    ev_speed: float
+    ev_wait: float
+    ev_road: str
+    ev_route_index: int
+    route_progress: RouteProgress | None
+    progress_upcoming_ids: set[str]
+    progress_passed_ids: set[str]
+    trafficlight_phases: Dict[str, int]
+    trafficlight_next_switch: Dict[str, float]
+    lane_halting_numbers: Dict[str, int]
+    lane_vehicle_numbers: Dict[str, int]
+    lane_waiting_times: Dict[str, float]
+
+
 class TrafficEnv:
     """
     Practical shared-policy RL environment with three controller layouts:
@@ -298,11 +358,15 @@ class TrafficEnv:
         intersection_clear_bonus: float = 2.0,
         controller_type: str = CONTROLLER_SINGLE_AGENT,
         traffic_scale: float = 1.0,
+        debug_logs: bool = False,
+        profile_runtime: bool = False,
     ) -> None:
         self.config = config
         self.headless = headless
         self.max_episode_steps = max_episode_steps if max_episode_steps is not None else config.max_steps
         self.intersection_clear_bonus = intersection_clear_bonus
+        self.debug_logs = debug_logs
+        self.profile_runtime = profile_runtime
         self.controller_type = controller_type
         self.traffic_scale = traffic_scale
         self.ev_id = config.ev_id
@@ -322,6 +386,20 @@ class TrafficEnv:
         self._reward_debug_counter = 0
         self._route_log_counter = 0
         self._agent_ids: List[str] = []
+        self._controlled_lanes_by_tl: Dict[str, tuple[str, ...]] = {}
+        self._junction_positions: Dict[str, tuple[float, float]] = {}
+        self._lane_directions_by_tl: Dict[str, Dict[str, str]] = {}
+        self._phase_count_by_tl: Dict[str, int] = {}
+        self._lane_endpoints: Dict[str, tuple[float, float]] = {}
+        self._ev_phase_by_tl: Dict[str, int] = {}
+        self._step_cache: StepCache | None = None
+        self._profile_totals: Dict[str, float] = {
+            'action_application': 0.0,
+            'reward_computation': 0.0,
+            'state_construction': 0.0,
+            'step_total': 0.0,
+        }
+        self._profile_steps = 0
         self._prev_agent_queue_totals: Dict[str, float] = {}
         self._prev_agent_phases: Dict[str, int] = {}
         self._last_reward_breakdowns: Dict[str, Dict[str, float]] = {}
@@ -329,7 +407,7 @@ class TrafficEnv:
         self._last_congestion_features: Dict[str, Dict[str, float]] = {}
         self._last_multi_level_diagnostics: Dict[str, Dict[str, float]] = {}
         self._reward_weights_logged = False
-        self.debug_congestion_features = True
+        self.debug_congestion_features = self.debug_logs
         self._congestion_feature_seen_nonzero = False
         self._congestion_feature_warning_logged = False
         self._adaptive_mode_steps: Dict[str, int] = {"low": 0, "medium": 0, "high": 0}
@@ -363,6 +441,7 @@ class TrafficEnv:
 
     def _start_sumo(self) -> None:
         self._close()
+        self._invalidate_step_cache()
         sumo_binary = _get_sumo_binary(use_gui=not self.headless)
         sumocfg_path = _resolve_sumocfg_path(self.config.sumo_config)
         if not os.path.exists(sumocfg_path):
@@ -374,6 +453,118 @@ class TrafficEnv:
             start_cmd.append("--start")
         traci.start(start_cmd)
         self._started = True
+
+    def _invalidate_step_cache(self) -> None:
+        self._step_cache = None
+
+    def _cache_trafficlight_geometry(self) -> None:
+        self._controlled_lanes_by_tl = {}
+        self._junction_positions = {}
+        self._lane_directions_by_tl = {}
+        self._phase_count_by_tl = {}
+        self._lane_endpoints = {}
+        for tl_id in self._agent_ids:
+            self._junction_positions[tl_id] = tuple(traci.junction.getPosition(tl_id))
+            controlled_lanes = tuple(dict.fromkeys(traci.trafficlight.getControlledLanes(tl_id)))
+            self._controlled_lanes_by_tl[tl_id] = controlled_lanes
+            self._phase_count_by_tl[tl_id] = max(1, len(traci.trafficlight.getAllProgramLogics(tl_id)[0].phases)) if traci.trafficlight.getAllProgramLogics(tl_id) else 1
+            lane_directions: Dict[str, str] = {}
+            junction_pos = self._junction_positions[tl_id]
+            for lane_id in controlled_lanes:
+                lane_directions[lane_id] = _approach_direction(lane_id, junction_pos)
+                if lane_id not in self._lane_endpoints:
+                    shape = traci.lane.getShape(lane_id)
+                    if shape:
+                        self._lane_endpoints[lane_id] = tuple(shape[-1])
+            self._lane_directions_by_tl[tl_id] = lane_directions
+
+    def _current_step_cache(self) -> StepCache:
+        sim_time = float(traci.simulation.getTime())
+        if self._step_cache is not None and self._step_cache.sim_time == sim_time:
+            return self._step_cache
+
+        vehicle_ids = tuple(traci.vehicle.getIDList())
+        vehicle_set = set(vehicle_ids)
+        vehicle_positions: Dict[str, tuple[float, float]] = {}
+        vehicle_speeds: Dict[str, float] = {}
+        vehicle_waiting_times: Dict[str, float] = {}
+        queue_length_network = 0
+        for vehicle_id in vehicle_ids:
+            try:
+                vehicle_positions[vehicle_id] = tuple(traci.vehicle.getPosition(vehicle_id))
+            except traci_exceptions.TraCIException:
+                continue
+            try:
+                speed = float(traci.vehicle.getSpeed(vehicle_id))
+            except traci_exceptions.TraCIException:
+                speed = 0.0
+            vehicle_speeds[vehicle_id] = speed
+            if speed < STOP_SPEED_THRESHOLD:
+                queue_length_network += 1
+            try:
+                vehicle_waiting_times[vehicle_id] = float(traci.vehicle.getWaitingTime(vehicle_id))
+            except traci_exceptions.TraCIException:
+                vehicle_waiting_times[vehicle_id] = 0.0
+
+        lane_halting_numbers: Dict[str, int] = {}
+        lane_vehicle_numbers: Dict[str, int] = {}
+        lane_waiting_times: Dict[str, float] = {}
+        for lane_ids in self._controlled_lanes_by_tl.values():
+            for lane_id in lane_ids:
+                if lane_id in lane_halting_numbers:
+                    continue
+                try:
+                    lane_halting_numbers[lane_id] = int(traci.lane.getLastStepHaltingNumber(lane_id))
+                except traci_exceptions.TraCIException:
+                    lane_halting_numbers[lane_id] = 0
+                try:
+                    lane_vehicle_numbers[lane_id] = int(traci.lane.getLastStepVehicleNumber(lane_id))
+                except traci_exceptions.TraCIException:
+                    lane_vehicle_numbers[lane_id] = 0
+                try:
+                    lane_waiting_times[lane_id] = float(traci.lane.getWaitingTime(lane_id))
+                except traci_exceptions.TraCIException:
+                    lane_waiting_times[lane_id] = 0.0
+
+        ev_present = self.ev_id in vehicle_set
+        ev_position: tuple[float, float] | None = vehicle_positions.get(self.ev_id) if ev_present else None
+        ev_speed = vehicle_speeds.get(self.ev_id, 0.0) if ev_present else 0.0
+        ev_wait = vehicle_waiting_times.get(self.ev_id, 0.0) if ev_present else 0.0
+        ev_road = traci.vehicle.getRoadID(self.ev_id) if ev_present else ''
+        ev_route_index = traci.vehicle.getRouteIndex(self.ev_id) if ev_present else -1
+        route_progress = route_progress_for_vehicle(self.ev_id, self._route_signals) if ev_present and self._route_signals else None
+        progress_upcoming_ids = {signal.tl_id for signal in route_progress.upcoming} if route_progress is not None else set()
+        progress_passed_ids = {signal.tl_id for signal in route_progress.passed} if route_progress is not None else set()
+
+        cache = StepCache(
+            sim_time=sim_time,
+            vehicle_ids=vehicle_ids,
+            vehicle_set=vehicle_set,
+            vehicle_positions=vehicle_positions,
+            vehicle_speeds=vehicle_speeds,
+            vehicle_waiting_times=vehicle_waiting_times,
+            queue_length_network=queue_length_network,
+            throughput=float(traci.simulation.getArrivedNumber()),
+            ev_present=ev_present,
+            ev_position=ev_position,
+            ev_speed=ev_speed,
+            ev_wait=ev_wait,
+            ev_road=ev_road,
+            ev_route_index=ev_route_index,
+            route_progress=route_progress,
+            progress_upcoming_ids=progress_upcoming_ids,
+            progress_passed_ids=progress_passed_ids,
+            trafficlight_phases={tl_id: int(traci.trafficlight.getPhase(tl_id)) for tl_id in self._agent_ids},
+            trafficlight_next_switch={
+                tl_id: float(traci.trafficlight.getNextSwitch(tl_id)) if tl_id in self._agent_ids else sim_time
+                for tl_id in self._agent_ids
+            },
+            lane_halting_numbers=lane_halting_numbers,
+            lane_vehicle_numbers=lane_vehicle_numbers,
+            lane_waiting_times=lane_waiting_times,
+        )
+        self._step_cache = cache
+        return cache
 
     def _wait_for_ev(self, max_wait_steps: int = 4000) -> None:
         for _ in range(max_wait_steps):
@@ -391,6 +582,12 @@ class TrafficEnv:
         self._route_signal_by_id = {signal.tl_id: signal for signal in self._route_signals}
         self._neighbor_map = self._build_neighbor_map()
         self._agent_ids = sorted(traci.trafficlight.getIDList())
+        self._cache_trafficlight_geometry()
+        self._ev_phase_by_tl = {}
+        for tl_id in self._agent_ids:
+            route_signal = self._route_signal_by_id.get(tl_id)
+            route_lanes = list(route_signal.route_lanes) if route_signal is not None else []
+            self._ev_phase_by_tl[tl_id] = infer_ev_green_phase(tl_id, route_lanes)
 
     def _build_neighbor_map(self) -> Dict[str, List[str]]:
         tls_ids = list(traci.trafficlight.getIDList())
@@ -498,23 +695,29 @@ class TrafficEnv:
         return progress.next_signal
 
     def _queue_length_network(self) -> int:
-        veh_ids = traci.vehicle.getIDList()
-        return sum(1 for v_id in veh_ids if traci.vehicle.getSpeed(v_id) < STOP_SPEED_THRESHOLD)
+        cache = self._step_cache or self._current_step_cache()
+        return cache.queue_length_network
 
     def _directional_queues(self, tl_id: str) -> Dict[str, int]:
-        junction_pos = traci.junction.getPosition(tl_id)
         queues = {"north": 0, "south": 0, "east": 0, "west": 0}
-        for lane_id in set(traci.trafficlight.getControlledLanes(tl_id)):
-            direction = _approach_direction(lane_id, junction_pos)
-            queues[direction] += traci.lane.getLastStepHaltingNumber(lane_id)
+        lane_directions = self._lane_directions_by_tl.get(tl_id)
+        if lane_directions is None:
+            junction_pos = self._junction_positions.get(tl_id, tuple(traci.junction.getPosition(tl_id)))
+            lane_directions = {}
+            for lane_id in self._controlled_lanes_by_tl.get(tl_id, tuple(dict.fromkeys(traci.trafficlight.getControlledLanes(tl_id)))):
+                lane_directions[lane_id] = _approach_direction(lane_id, junction_pos)
+        cache = self._step_cache or self._current_step_cache()
+        for lane_id, direction in lane_directions.items():
+            queues[direction] += int(cache.lane_halting_numbers.get(lane_id, 0))
         return queues
 
     def _nearby_vehicle_count(self, tl_id: str, radius: float = 120.0) -> int:
-        junction_x, junction_y = traci.junction.getPosition(tl_id)
+        cache = self._step_cache or self._current_step_cache()
+        junction_x, junction_y = self._junction_positions.get(tl_id, tuple(traci.junction.getPosition(tl_id)))
         nearby_count = 0
-        for vehicle_id in traci.vehicle.getIDList():
-            x, y = traci.vehicle.getPosition(vehicle_id)
-            if ((x - junction_x) ** 2 + (y - junction_y) ** 2) ** 0.5 <= radius:
+        radius_sq = radius * radius
+        for x, y in cache.vehicle_positions.values():
+            if ((x - junction_x) ** 2 + (y - junction_y) ** 2) <= radius_sq:
                 nearby_count += 1
         return nearby_count
 
@@ -536,14 +739,10 @@ class TrafficEnv:
         neighbors = self._neighbor_map.get(tl_id, [])
         if not neighbors:
             return 0.0
+        cache = self._step_cache or self._current_step_cache()
         wait_totals: list[float] = []
         for neighbor_id in neighbors:
-            lane_waits = []
-            for lane_id in set(traci.trafficlight.getControlledLanes(neighbor_id)):
-                try:
-                    lane_waits.append(float(traci.lane.getWaitingTime(lane_id)))
-                except traci_exceptions.TraCIException:
-                    continue
+            lane_waits = [cache.lane_waiting_times.get(lane_id, 0.0) for lane_id in self._controlled_lanes_by_tl.get(neighbor_id, tuple())]
             wait_totals.append(float(sum(lane_waits) / len(lane_waits)) if lane_waits else 0.0)
         return float(sum(wait_totals) / len(wait_totals)) if wait_totals else 0.0
 
@@ -551,52 +750,49 @@ class TrafficEnv:
         neighbors = self._neighbor_map.get(tl_id, [])
         if not neighbors:
             return 0.0
+        cache = self._step_cache or self._current_step_cache()
         throughput_totals: list[float] = []
         for neighbor_id in neighbors:
-            lane_flows = []
-            for lane_id in set(traci.trafficlight.getControlledLanes(neighbor_id)):
-                try:
-                    lane_flows.append(float(traci.lane.getLastStepVehicleNumber(lane_id)))
-                except traci_exceptions.TraCIException:
-                    continue
+            lane_flows = [cache.lane_vehicle_numbers.get(lane_id, 0) for lane_id in self._controlled_lanes_by_tl.get(neighbor_id, tuple())]
             throughput_totals.append(float(sum(lane_flows) / len(lane_flows)) if lane_flows else 0.0)
         return float(sum(throughput_totals) / len(throughput_totals)) if throughput_totals else 0.0
 
     def _neighbor_emergency_vehicle_present(self, tl_id: str) -> float:
         neighbors = self._neighbor_map.get(tl_id, [])
-        if not neighbors or self.ev_id not in traci.vehicle.getIDList():
+        cache = self._step_cache or self._current_step_cache()
+        if not neighbors or not cache.ev_present or not cache.route_progress:
             return 0.0
-        progress = route_progress_for_vehicle(self.ev_id, self._route_signals)
-        upcoming_ids = {signal.tl_id for signal in progress.upcoming}
+        upcoming_ids = cache.progress_upcoming_ids
         return 1.0 if any(neighbor_id in upcoming_ids for neighbor_id in neighbors) else 0.0
 
     def _phase_features(self, tl_id: str) -> Tuple[float, float, int]:
-        logic = traci.trafficlight.getAllProgramLogics(tl_id)
-        n_phases = max(1, len(logic[0].phases)) if logic else 1
-        phase_idx = traci.trafficlight.getPhase(tl_id)
-        phase_norm = float(phase_idx) / float(n_phases)
-        t = traci.simulation.getTime()
-        try:
-            next_sw = traci.trafficlight.getNextSwitch(tl_id)
-            remaining = max(0.0, float(next_sw) - t)
-        except traci_exceptions.TraCIException:
-            remaining = 0.0
+        cache = self._step_cache or self._current_step_cache()
+        phase_idx = int(cache.trafficlight_phases.get(tl_id, traci.trafficlight.getPhase(tl_id)))
+        n_phases = self._phase_count_by_tl.get(tl_id, 1)
+        phase_norm = float(phase_idx) / float(max(n_phases, 1))
+        next_sw = cache.trafficlight_next_switch.get(tl_id, float(traci.trafficlight.getNextSwitch(tl_id)))
+        remaining = max(0.0, float(next_sw) - cache.sim_time)
         remaining_norm = min(1.0, remaining / 120.0)
         return phase_norm, remaining_norm, phase_idx
 
     def _distance_to_tl(self, tl_id: str) -> float:
-        if self.ev_id not in traci.vehicle.getIDList():
+        cache = self._step_cache or self._current_step_cache()
+        if not cache.ev_present or cache.ev_position is None:
             return MAX_EV_FEATURE_DISTANCE
 
         route_signal = self._route_signal_by_id.get(tl_id)
+        ev_x, ev_y = cache.ev_position
         if route_signal is not None:
+            endpoints = [self._lane_endpoints.get(lane_id) for lane_id in route_signal.route_lanes]
+            route_points = [point for point in endpoints if point is not None]
+            if route_points:
+                return float(min(((ev_x - x) ** 2 + (ev_y - y) ** 2) ** 0.5 for x, y in route_points))
             try:
                 return float(max(0.0, signal_distance(self.ev_id, route_signal)))
             except traci_exceptions.TraCIException:
                 pass
 
-        ev_x, ev_y = traci.vehicle.getPosition(self.ev_id)
-        tl_x, tl_y = traci.junction.getPosition(tl_id)
+        tl_x, tl_y = self._junction_positions.get(tl_id, tuple(traci.junction.getPosition(tl_id)))
         return float(((ev_x - tl_x) ** 2 + (ev_y - tl_y) ** 2) ** 0.5)
 
     def _ev_relevance(self, distance: float) -> float:
@@ -639,29 +835,27 @@ class TrafficEnv:
         if not neighbors:
             return 0.0
 
+        cache = self._step_cache or self._current_step_cache()
         demand_terms: list[float] = []
         for neighbor_id in neighbors:
             neighbor_queue = float(sum(self._directional_queues(neighbor_id).values()))
             neighbor_density = float(self._nearby_vehicle_count(neighbor_id))
             outgoing_flow = 0.0
-            for lane_id in set(traci.trafficlight.getControlledLanes(neighbor_id)):
-                try:
-                    outgoing_flow += float(traci.lane.getLastStepVehicleNumber(lane_id))
-                except traci_exceptions.TraCIException:
-                    continue
+            for lane_id in self._controlled_lanes_by_tl.get(neighbor_id, tuple()):
+                outgoing_flow += float(cache.lane_vehicle_numbers.get(lane_id, 0))
             demand_terms.append((neighbor_queue / 20.0) * 0.45 + (outgoing_flow / 25.0) * 0.35 + (neighbor_density / 40.0) * 0.20)
         return float(sum(demand_terms) / len(demand_terms))
 
     def _global_traffic_features(self) -> Dict[str, float]:
-        veh_ids = traci.vehicle.getIDList()
-        vehicle_count = max(len(veh_ids), 1)
+        cache = self._step_cache or self._current_step_cache()
+        vehicle_count = max(len(cache.vehicle_ids), 1)
         agent_count = max(len(self._agent_ids), 1)
         queues = [float(sum(self._directional_queues(tl_id).values())) for tl_id in self._agent_ids]
-        waits = [float(traci.vehicle.getWaitingTime(v_id)) for v_id in veh_ids] if veh_ids else []
+        waits = list(cache.vehicle_waiting_times.values())
         avg_queue_length_raw = float(sum(queues) / len(queues)) if queues else 0.0
         avg_waiting_time_raw = float(sum(waits) / len(waits)) if waits else 0.0
         total_network_congestion_raw = self._network_congestion_ratio()
-        throughput_raw = float(traci.simulation.getArrivedNumber())
+        throughput_raw = float(cache.throughput)
         pct_congested_intersections_raw = float(
             sum(1 for tl_id in self._agent_ids if float(np.clip(sum(self._directional_queues(tl_id).values()) / 20.0, 0.0, 1.0)) >= 0.5)
             / max(len(self._agent_ids), 1)
@@ -669,18 +863,14 @@ class TrafficEnv:
         blocked_approaches_raw = 0.0
         total_approaches = 0
         for tl_id in self._agent_ids:
-            for lane_id in set(traci.trafficlight.getControlledLanes(tl_id)):
+            for lane_id in self._controlled_lanes_by_tl.get(tl_id, tuple()):
                 total_approaches += 1
-                try:
-                    if float(traci.lane.getLastStepHaltingNumber(lane_id)) >= 3.0:
-                        blocked_approaches_raw += 1.0
-                except traci_exceptions.TraCIException:
-                    continue
+                if float(cache.lane_halting_numbers.get(lane_id, 0)) >= 3.0:
+                    blocked_approaches_raw += 1.0
         global_traffic_density_raw = float(vehicle_count / max(agent_count * 12.0, 1.0))
         ev_network_progress_raw = 0.0
-        if self.ev_id in veh_ids and self._route_signals:
-            progress = route_progress_for_vehicle(self.ev_id, self._route_signals)
-            ev_network_progress_raw = float(len(progress.passed) / max(len(self._route_signals), 1))
+        if cache.ev_present and cache.route_progress is not None:
+            ev_network_progress_raw = float(len(cache.progress_passed_ids) / max(len(self._route_signals), 1))
 
         return {
             "avg_queue_length": float(np.clip(avg_queue_length_raw / 20.0, 0.0, 1.0)),
@@ -728,17 +918,19 @@ class TrafficEnv:
         }
 
     def _controlled_lane_count(self, tl_id: str) -> int:
-        return max(len(set(traci.trafficlight.getControlledLanes(tl_id))), 1)
+        return max(len(self._controlled_lanes_by_tl.get(tl_id, tuple())), 1)
 
     def _network_congestion_score(self) -> float:
-        vehicle_count = max(len(traci.vehicle.getIDList()), 1)
-        return float(np.clip(self._queue_length_network() / vehicle_count, 0.0, 1.0))
+        cache = self._step_cache or self._current_step_cache()
+        vehicle_count = max(len(cache.vehicle_ids), 1)
+        return float(np.clip(cache.queue_length_network / vehicle_count, 0.0, 1.0))
 
     def _congestion_feature_snapshot(self, tl_id: str, ctx: AgentContext) -> Dict[str, float]:
         controlled_lane_count = self._controlled_lane_count(tl_id)
         prev_local_queue = self._prev_agent_queue_totals.get(tl_id, ctx.local_queue)
         prev_network_queue = self._prev_network_queue
-        network_queue = float(self._queue_length_network())
+        cache = self._step_cache or self._current_step_cache()
+        network_queue = float(cache.queue_length_network)
         local_queue_delta = ctx.local_queue - prev_local_queue
         network_queue_delta = network_queue - prev_network_queue
         local_congestion_index = float(np.clip(ctx.local_queue / max(controlled_lane_count * 15.0, 1.0), 0.0, 1.0))
@@ -775,7 +967,7 @@ class TrafficEnv:
         }
 
     def _log_congestion_snapshot(self, step: int, tl_id: str, features: Dict[str, float]) -> None:
-        if not self.debug_congestion_features:
+        if not self.debug_logs or not self.debug_congestion_features:
             return
         if step <= 0 or step % 100 != 0:
             return
@@ -830,10 +1022,15 @@ class TrafficEnv:
         downstream_congestion = self._outgoing_neighbor_pressure(tl_id)
         neighbor_phase_avg = self._neighbor_phase_average(tl_id)
         incoming_traffic_estimate = self._incoming_traffic_estimate(tl_id)
-        ev_neighbor_eta = self._ev_neighbor_eta(tl_id)
         route_signal = self._route_signal_by_id.get(tl_id)
         route_lanes = route_signal.route_lanes if route_signal is not None else tuple()
-        ev_phase = infer_ev_green_phase(tl_id, list(route_lanes))
+        ev_phase = self._ev_phase_by_tl.get(
+            tl_id,
+            infer_ev_green_phase(tl_id, list(route_lanes)),
+        )
+        ev_neighbor_eta = 1.0
+        if dist <= min(MAX_EV_FEATURE_DISTANCE, 300.0):
+            ev_neighbor_eta = self._ev_neighbor_eta(tl_id)
 
         controlled_lane_count = self._controlled_lane_count(tl_id)
         prev_local_queue = self._prev_agent_queue_totals.get(tl_id, local_queue)
@@ -879,7 +1076,9 @@ class TrafficEnv:
             neighbor_waiting_time=self._average_neighbor_waiting_time(tl_id),
             neighbor_throughput_estimate=self._average_neighbor_throughput(tl_id),
             downstream_spillback_indicator=float(np.clip(downstream_congestion / 2.0, 0.0, 1.0)),
-            neighbor_emergency_vehicle_present=self._neighbor_emergency_vehicle_present(tl_id),
+            neighbor_emergency_vehicle_present=(
+                self._neighbor_emergency_vehicle_present(tl_id) if dist <= min(MAX_EV_FEATURE_DISTANCE, 300.0) else 0.0
+            ),
             ev_relevant=self._ev_relevance(dist),
             on_ev_route=route_signal is not None,
             local_congestion_index=local_congestion_index,
@@ -913,7 +1112,8 @@ class TrafficEnv:
         return ctx
 
     def _normalize_base_state(self, ctx: AgentContext) -> list[float]:
-        speed = traci.vehicle.getSpeed(self.ev_id) if self.ev_id in traci.vehicle.getIDList() else 0.0
+        cache = self._step_cache or self._current_step_cache()
+        speed = cache.vehicle_speeds.get(self.ev_id, 0.0) if cache.ev_present else 0.0
         speed_norm = float(np.clip(speed / 25.0, 0.0, 1.0))
         return [
             ctx.ev_distance_norm,
@@ -982,6 +1182,8 @@ class TrafficEnv:
         return np.asarray(state_values, dtype=np.float32)
 
     def _log_state(self, tl_id: str, state: np.ndarray, ctx: AgentContext) -> None:
+        if not self.debug_logs:
+            return
         self._state_debug_counter += 1
         if self._state_debug_counter <= 10 or self._state_debug_counter % 60 == 0:
             print(
@@ -992,7 +1194,7 @@ class TrafficEnv:
             )
 
     def _route_debug(self) -> None:
-        if self.ev_id not in traci.vehicle.getIDList():
+        if not self.debug_logs or self.ev_id not in traci.vehicle.getIDList():
             return
         progress = route_progress_for_vehicle(self.ev_id, self._route_signals)
         self._route_log_counter += 1
@@ -1003,11 +1205,18 @@ class TrafficEnv:
                 f"passed={[signal.tl_id for signal in progress.passed]}"
             )
 
-    def _build_all_states(self) -> Dict[str, np.ndarray]:
+    def _build_all_states(
+        self,
+        contexts: Dict[str, AgentContext] | None = None,
+        global_features: Dict[str, float] | None = None,
+    ) -> Dict[str, np.ndarray]:
         states: Dict[str, np.ndarray] = {}
-        global_features = self._global_traffic_features()
+        if contexts is None:
+            contexts = {tl_id: self._build_agent_context(tl_id) for tl_id in self._agent_ids}
+        if global_features is None:
+            global_features = self._global_traffic_features()
         for tl_id in self._agent_ids:
-            ctx = self._build_agent_context(tl_id)
+            ctx = contexts[tl_id]
             state = self._state_from_context(ctx, global_features)
             states[tl_id] = state
             self._log_state(tl_id, state, ctx)
@@ -1015,7 +1224,8 @@ class TrafficEnv:
 
     def get_state(self) -> np.ndarray | Dict[str, np.ndarray]:
         if self.is_multi_agent:
-            if self.ev_id not in traci.vehicle.getIDList() and not self._started:
+            cache = self._step_cache or self._current_step_cache()
+            if not cache.ev_present and not self._started:
                 return {tl_id: np.zeros(self.state_dim, dtype=np.float32) for tl_id in self._agent_ids}
             return self._build_all_states()
 
@@ -1045,16 +1255,22 @@ class TrafficEnv:
         self._state_debug_counter = 0
         self._reward_debug_counter = 0
         self._route_log_counter = 0
-        self._prev_agent_queue_totals = {
-            tl_id: float(sum(self._directional_queues(tl_id).values())) for tl_id in self._agent_ids
-        }
         self._prev_agent_phases = {tl_id: traci.trafficlight.getPhase(tl_id) for tl_id in self._agent_ids}
         self._last_reward_breakdowns = {}
         self._last_coordination_terms = {}
         self._last_multi_level_diagnostics = {}
         self._reset_red_signal_probe_stats()
         self._reset_adaptive_episode_stats()
-        state = self.get_state()
+        if self.is_multi_agent:
+            self._current_step_cache()
+            initial_contexts = {tl_id: self._build_agent_context(tl_id) for tl_id in self._agent_ids}
+            self._prev_agent_queue_totals = {tl_id: ctx.local_queue for tl_id, ctx in initial_contexts.items()}
+            state = self._build_all_states(contexts=initial_contexts)
+        else:
+            self._prev_agent_queue_totals = {
+                tl_id: float(sum(self._directional_queues(tl_id).values())) for tl_id in self._agent_ids
+            }
+            state = self.get_state()
 
         print(
             f"[RL_INIT] controller_type={self.controller_type} agents={len(self._agent_ids)} "
@@ -1096,8 +1312,9 @@ class TrafficEnv:
         return state
 
     def _network_congestion_ratio(self) -> float:
-        vehicle_count = max(len(traci.vehicle.getIDList()), 1)
-        return float(self._queue_length_network()) / float(vehicle_count)
+        cache = self._step_cache or self._current_step_cache()
+        vehicle_count = max(len(cache.vehicle_ids), 1)
+        return float(cache.queue_length_network) / float(vehicle_count)
 
     def _reset_adaptive_episode_stats(self) -> None:
         self._adaptive_mode_steps = {"low": 0, "medium": 0, "high": 0}
@@ -1248,7 +1465,7 @@ class TrafficEnv:
             "downstream_blockage_penalty": float(breakdown.get("downstream_blockage_penalty", 0.0)),
         }
 
-        if self._red_signal_probe_print_count < 40 or self._red_signal_probe_print_count % 50 == 0:
+        if self.debug_logs and (self._red_signal_probe_print_count < 40 or self._red_signal_probe_print_count % 50 == 0):
             print(
                 "[RED_SIGNAL_PROBE] "
                 f"agent={tl_id} phase={current_phase} ev_phase={ctx.ev_phase} "
@@ -1339,6 +1556,8 @@ class TrafficEnv:
         self,
         actions: Dict[str, int],
         previous_passed: set[str],
+        contexts: Dict[str, AgentContext] | None = None,
+        global_features: Dict[str, float] | None = None,
     ) -> Dict[str, float]:
         ev_present = self.ev_id in traci.vehicle.getIDList()
         wait = traci.vehicle.getWaitingTime(self.ev_id) if ev_present else self._prev_ev_wait
@@ -1359,6 +1578,9 @@ class TrafficEnv:
         self._last_reward_breakdowns = {}
         self._last_coordination_terms = {}
         self._last_congestion_features = {}
+        contexts = contexts or {}
+        if global_features is None:
+            global_features = self._global_traffic_features()
 
         adaptive_scales: tuple[float, float] | None = None
         adaptive_level = "medium"
@@ -1377,7 +1599,9 @@ class TrafficEnv:
             self._last_adaptive_reward_info = {}
 
         for tl_id in self._agent_ids:
-            ctx = self._build_agent_context(tl_id)
+            ctx = contexts.get(tl_id) if contexts else None
+            if ctx is None:
+                ctx = self._build_agent_context(tl_id)
             congestion_features = self._congestion_feature_snapshot(tl_id, ctx)
             local_queue = ctx.local_queue
             prev_local_queue = self._prev_agent_queue_totals.get(tl_id, local_queue)
@@ -1410,28 +1634,30 @@ class TrafficEnv:
             congestion_imbalance = float(np.clip((congestion_features["congestion_imbalance_ns"] + congestion_features["congestion_imbalance_ew"]) / 2.0, 0.0, 1.0))
             congestion_trend = float(np.clip(max(0.0, (congestion_features["congestion_trend_local"] + congestion_features["congestion_trend_network"]) / 2.0), 0.0, 1.0))
 
-            metrics = {
-                "ev_waiting_time": delta_wait * max(ctx.ev_relevant, 0.25 if ctx.on_ev_route else 0.0),
-                "queue_length": local_queue,
-                "queue_growth": queue_growth,
-                "ev_stops": stop_event * ctx.ev_relevant,
-                "low_speed_near_signal": low_speed_near_signal,
-                "throughput": throughput_share,
-                "signal_switch": switch_event,
-                "intersection_clear": clear_bonus / max(self.intersection_clear_bonus, 1e-6),
-                "neighbor_congestion": ctx.neighbor_queue_avg,
-                "network_congestion": queue_len / max(len(traci.vehicle.getIDList()), 1),
-                "corridor_flow": 0.0,
-                "downstream_blockage": congestion_features["downstream_blockage_ratio"],
-                "traffic_stability": congestion_features["queue_growth_rate"],
-                "congestion_reduction": congestion_reduction,
-                "queue_stabilization": queue_stabilization,
-                "spillback_prevention": spillback_prevention,
-                "congestion_transfer": congestion_transfer,
-                "corridor_congestion": corridor_congestion,
-                "congestion_imbalance": congestion_imbalance,
-                "congestion_trend": congestion_trend,
-            }
+            metrics = complete_reward_metrics(
+                {
+                    "ev_waiting_time": delta_wait * max(ctx.ev_relevant, 0.25 if ctx.on_ev_route else 0.0),
+                    "queue_length": local_queue,
+                    "queue_growth": queue_growth,
+                    "ev_stops": stop_event * ctx.ev_relevant,
+                    "low_speed_near_signal": low_speed_near_signal,
+                    "throughput": throughput_share,
+                    "signal_switch": switch_event,
+                    "intersection_clear": clear_bonus / max(self.intersection_clear_bonus, 1e-6),
+                    "neighbor_congestion": ctx.neighbor_queue_avg,
+                    "network_congestion": queue_len / max(len(traci.vehicle.getIDList()), 1),
+                    "corridor_flow": 0.0,
+                    "downstream_blockage": congestion_features["downstream_blockage_ratio"],
+                    "traffic_stability": congestion_features["queue_growth_rate"],
+                    "congestion_reduction": congestion_reduction,
+                    "queue_stabilization": queue_stabilization,
+                    "spillback_prevention": spillback_prevention,
+                    "congestion_transfer": congestion_transfer,
+                    "corridor_congestion": corridor_congestion,
+                    "congestion_imbalance": congestion_imbalance,
+                    "congestion_trend": congestion_trend,
+                }
+            )
             coordination_terms = self._coordination_terms(ctx, switch_event) if self.coordination_enabled else {
                 "network_congestion": 0.0,
                 "corridor_flow": 0.0,
@@ -1449,7 +1675,7 @@ class TrafficEnv:
             self._last_congestion_features[tl_id] = congestion_features
             if self.controller_type in {CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
                 multi_level = self._multi_level_reward_contributions(breakdown)
-                global_features = self._global_traffic_features()
+                assert global_features is not None
                 multi_level.update(
                     {
                         "average_neighbor_congestion": float(ctx.neighbor_queue_avg / 20.0),
@@ -1460,14 +1686,15 @@ class TrafficEnv:
                 )
                 self._last_multi_level_diagnostics[tl_id] = multi_level
 
-            self._reward_debug_counter += 1
-            if self._reward_debug_counter <= 16 or self._reward_debug_counter % 60 == 0:
-                print(
-                    f"[RL_REWARD] agent={tl_id} action={actions.get(tl_id, 0)} local_queue={local_queue:.1f} "
-                    f"neighbor_queue={ctx.neighbor_queue_avg:.2f} downstream={ctx.downstream_congestion:.2f} "
-                    f"incoming={ctx.incoming_traffic_estimate:.2f} reward={reward:.3f} "
-                    f"congestion={congestion_features} coord={coordination_terms} breakdown={breakdown}"
-                )
+            if self.debug_logs:
+                self._reward_debug_counter += 1
+                if self._reward_debug_counter <= 16 or self._reward_debug_counter % 60 == 0:
+                    print(
+                        f"[RL_REWARD] agent={tl_id} action={actions.get(tl_id, 0)} local_queue={local_queue:.1f} "
+                        f"neighbor_queue={ctx.neighbor_queue_avg:.2f} downstream={ctx.downstream_congestion:.2f} "
+                        f"incoming={ctx.incoming_traffic_estimate:.2f} reward={reward:.3f} "
+                        f"congestion={congestion_features} coord={coordination_terms} breakdown={breakdown}"
+                    )
 
         self._prev_network_queue = queue_len
         return rewards
@@ -1493,13 +1720,15 @@ class TrafficEnv:
         previous_progress = route_progress_for_vehicle(self.ev_id, self._route_signals) if ev_present_before else None
         previous_passed = {signal.tl_id for signal in previous_progress.passed} if previous_progress is not None else set()
 
+        pre_cache = self._current_step_cache()
+        pre_contexts = {tl_id: self._build_agent_context(tl_id) for tl_id in self._agent_ids}
         action_log: Dict[str, Dict[str, float]] = {}
         action_trace: Dict[str, Dict[str, float]] = {}
         red_signal_probes: list[Dict[str, float | int | str]] = []
         ev_distance_before_map: Dict[str, float] = {}
-        phase_before_map = {tl_id: float(traci.trafficlight.getPhase(tl_id)) for tl_id in self._agent_ids}
+        phase_before_map = {tl_id: float(pre_cache.trafficlight_phases.get(tl_id, 0)) for tl_id in self._agent_ids}
         for tl_id in self._agent_ids:
-            ctx = self._build_agent_context(tl_id)
+            ctx = pre_contexts[tl_id]
             ev_distance_before_map[tl_id] = float(ctx.ev_distance)
             requested_action = int(actions.get(tl_id, 0))
             applied_action = requested_action
@@ -1525,7 +1754,8 @@ class TrafficEnv:
             }
             actions[tl_id] = applied_action
 
-        print(f"[RL_ACTION] active_agents={len(self._agent_ids)} actions={action_log}")
+        if self.debug_logs:
+            print(f"[RL_ACTION] active_agents={len(self._agent_ids)} actions={action_log}")
 
         try:
             traci.simulationStep()
@@ -1534,25 +1764,37 @@ class TrafficEnv:
             zero_rewards = {tl_id: 0.0 for tl_id in self._agent_ids}
             return zero_states, zero_rewards, True, {"error": "traci_closed"}
 
+        self._invalidate_step_cache()
         self._episode_steps += 1
+        post_cache = self._current_step_cache()
+        post_contexts = {tl_id: self._build_agent_context(tl_id) for tl_id in self._agent_ids}
+        global_features = self._global_traffic_features()
         if self.controller_type == CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO and self._agent_ids:
             sample_tl = self._agent_ids[0]
-            sample_ctx = self._build_agent_context(sample_tl)
+            sample_ctx = post_contexts[sample_tl]
             self._log_congestion_snapshot(self._episode_steps, sample_tl, self._congestion_feature_snapshot(sample_tl, sample_ctx))
-        rewards = self._compute_agent_rewards(actions, previous_passed)
-        next_states = self.get_state()
+        rewards = self._compute_agent_rewards(
+            actions,
+            previous_passed,
+            contexts=post_contexts,
+            global_features=global_features,
+        )
+        next_states = self._build_all_states(contexts=post_contexts, global_features=global_features)
         done = self._done()
         self._maybe_warn_inactive_congestion_features(done)
         ev_present_after = self.ev_id in traci.vehicle.getIDList()
         ev_speed_after = traci.vehicle.getSpeed(self.ev_id) if ev_present_after else ev_speed_before
         ev_wait_after = traci.vehicle.getWaitingTime(self.ev_id) if ev_present_after else ev_wait_before
-        ev_distance_after_map = {tl_id: (self._distance_to_tl(tl_id) if ev_present_after else ev_distance_before_map.get(tl_id, 0.0)) for tl_id in self._agent_ids}
+        ev_distance_after_map = {
+            tl_id: float(post_contexts[tl_id].ev_distance) if ev_present_after else ev_distance_before_map.get(tl_id, 0.0)
+            for tl_id in self._agent_ids
+        }
         for tl_id in self._agent_ids:
             if tl_id in action_trace:
-                action_trace[tl_id]["phase_after"] = float(traci.trafficlight.getPhase(tl_id))
+                action_trace[tl_id]["phase_after"] = float(post_cache.trafficlight_phases.get(tl_id, traci.trafficlight.getPhase(tl_id)))
             probe = self._record_red_signal_probe(
                 tl_id=tl_id,
-                ctx=self._build_agent_context(tl_id),
+                ctx=post_contexts[tl_id],
                 current_phase=int(action_trace[tl_id]["phase_before"]) if tl_id in action_trace else int(traci.trafficlight.getPhase(tl_id)),
                 requested_action=int(action_trace[tl_id]["requested_action"]) if tl_id in action_trace else 0,
                 applied_action=int(action_trace[tl_id]["applied_action"]) if tl_id in action_trace else 0,
@@ -1611,7 +1853,8 @@ class TrafficEnv:
                     "phase_before": float(current_phase),
                     "phase_after": float(self._prev_phase_idx),
                 }
-                print(f"[RL_ACTION] agent={focus_signal.tl_id} action={applied_action}")
+                if self.debug_logs:
+                    print(f"[RL_ACTION] agent={focus_signal.tl_id} action={applied_action}")
             else:
                 self._prev_phase_idx = None
 
@@ -1661,26 +1904,29 @@ class TrafficEnv:
             if dist <= NEAR_SIGNAL_DISTANCE_THRESHOLD and speed < LOW_SPEED_NEAR_SIGNAL_THRESHOLD:
                 low_speed_near_signal = (LOW_SPEED_NEAR_SIGNAL_THRESHOLD - speed) / LOW_SPEED_NEAR_SIGNAL_THRESHOLD
 
-        metrics = {
-            "ev_waiting_time": delta_wait,
-            "queue_length": queue_len,
-            "queue_growth": queue_growth,
-            "ev_stops": stop_event,
-            "low_speed_near_signal": low_speed_near_signal,
-            "throughput": throughput,
-            "signal_switch": switch_event,
-            "intersection_clear": clear_bonus / max(self.intersection_clear_bonus, 1e-6),
-            "neighbor_congestion": neighbor_congestion,
-            "network_congestion": queue_len / max(len(traci.vehicle.getIDList()), 1),
-            "corridor_flow": 0.0,
-            "downstream_blockage": 0.0,
-            "traffic_stability": 0.0,
-        }
+        metrics = complete_reward_metrics(
+            {
+                "ev_waiting_time": delta_wait,
+                "queue_length": queue_len,
+                "queue_growth": queue_growth,
+                "ev_stops": stop_event,
+                "low_speed_near_signal": low_speed_near_signal,
+                "throughput": throughput,
+                "signal_switch": switch_event,
+                "intersection_clear": clear_bonus / max(self.intersection_clear_bonus, 1e-6),
+                "neighbor_congestion": neighbor_congestion,
+                "network_congestion": queue_len / max(len(traci.vehicle.getIDList()), 1),
+                "corridor_flow": 0.0,
+                "downstream_blockage": 0.0,
+                "traffic_stability": 0.0,
+            }
+        )
         reward, breakdown = compute_reward(metrics)
 
-        self._reward_debug_counter += 1
-        if self._reward_debug_counter <= 8 or self._reward_debug_counter % 25 == 0:
-            print(f"[RL_REWARD] agent={self._focus_tl or 'none'} action={action} reward={reward:.3f} breakdown={breakdown}")
+        if self.debug_logs:
+            self._reward_debug_counter += 1
+            if self._reward_debug_counter <= 8 or self._reward_debug_counter % 25 == 0:
+                print(f"[RL_REWARD] agent={self._focus_tl or 'none'} action={action} reward={reward:.3f} breakdown={breakdown}")
 
         if not ev_present:
             done = True

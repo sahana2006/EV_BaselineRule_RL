@@ -1672,6 +1672,7 @@ def run_compare_all(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Multi-intersection EV signal controller with DRRS and coordinated MARL.")
     parser.add_argument("--sumocfg", default="scenario/simulation.sumocfg", help="Path to SUMO .sumocfg")
+    parser.add_argument("--output-root", default=None, help="Root directory for isolated evaluation outputs (logs/csv/plots)")
     parser.add_argument("--ev-id", default="ev_0", help="Emergency vehicle id")
     parser.add_argument("--headless", action="store_true", help="Use sumo instead of sumo-gui")
     parser.add_argument("--max-steps", type=int, default=7200, help="Maximum simulation steps")
@@ -1744,16 +1745,17 @@ def main() -> None:
     args = parse_args()
     if args.legacy_marl_model_path:
         args.coordinated_marl_model_path = args.legacy_marl_model_path
+    output_root = Path(args.output_root).resolve() if args.output_root else PROJECT_ROOT / "outputs"
     cfg = SimulationConfig(
         sumo_config=args.sumocfg,
         use_gui=not args.headless,
         ev_id=args.ev_id,
         max_steps=args.max_steps,
         post_ev_buffer_seconds=args.post_ev_seconds,
-        output_dir=PROJECT_ROOT / "outputs",
-        log_dir=PROJECT_ROOT / "outputs" / "logs",
-        plot_dir=PROJECT_ROOT / "outputs" / "plots",
-        csv_dir=PROJECT_ROOT / "outputs" / "csv",
+        output_dir=output_root,
+        log_dir=output_root / "logs",
+        plot_dir=output_root / "plots",
+        csv_dir=output_root / "csv",
     )
 
     if args.compare_ppo_trace:

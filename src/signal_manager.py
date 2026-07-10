@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 from typing import List
 
 import traci
+
+
+DEBUG_SIGNAL_LOGS = os.environ.get("SUMO_SIGNAL_DEBUG", "0") == "1"
 
 
 def infer_ev_green_phase(tl_id: str, route_lanes: List[str]) -> int:
@@ -55,7 +59,8 @@ def stage1_saturation_reduction(tl_id: str, edge_id: str, distance: float) -> No
 
     current_duration = traci.trafficlight.getPhaseDuration(tl_id)
     traci.trafficlight.setPhaseDuration(tl_id, current_duration + extension)
-    print(f"[{tl_id}] Stage=SATURATION DRRS={drrs:.3f} CLRS={clrs} TUL={tul} Extension={extension}s")
+    if DEBUG_SIGNAL_LOGS:
+        print(f"[{tl_id}] Stage=SATURATION DRRS={drrs:.3f} CLRS={clrs} TUL={tul} Extension={extension}s")
 
 
 def stage2_non_intrusive(tl_id: str, ev_phase: int, distance: float) -> None:
@@ -63,16 +68,19 @@ def stage2_non_intrusive(tl_id: str, ev_phase: int, distance: float) -> None:
     current_duration = traci.trafficlight.getPhaseDuration(tl_id)
     if current_phase != ev_phase:
         traci.trafficlight.setPhaseDuration(tl_id, max(2, current_duration - 2))
-        print(f"[{tl_id}] Stage=NON_INTRUSIVE prepare_ev_phase distance={distance:.1f}")
+        if DEBUG_SIGNAL_LOGS:
+            print(f"[{tl_id}] Stage=NON_INTRUSIVE prepare_ev_phase distance={distance:.1f}")
         return
     traci.trafficlight.setPhaseDuration(tl_id, current_duration + 3)
-    print(f"[{tl_id}] Stage=NON_INTRUSIVE extend_green distance={distance:.1f}")
+    if DEBUG_SIGNAL_LOGS:
+        print(f"[{tl_id}] Stage=NON_INTRUSIVE extend_green distance={distance:.1f}")
 
 
 def stage2_intrusive(tl_id: str, ev_phase: int, distance: float) -> None:
     traci.trafficlight.setPhase(tl_id, ev_phase)
     traci.trafficlight.setPhaseDuration(tl_id, 5)
-    print(f"[{tl_id}] Stage=INTRUSIVE FORCE GREEN distance={distance:.1f}")
+    if DEBUG_SIGNAL_LOGS:
+        print(f"[{tl_id}] Stage=INTRUSIVE FORCE GREEN distance={distance:.1f}")
 
 
 def stage3_recovery(tl_id: str, steps_left: int, default_program: str) -> int:
@@ -81,19 +89,22 @@ def stage3_recovery(tl_id: str, steps_left: int, default_program: str) -> int:
     steps_left -= 1
     if steps_left <= 0:
         traci.trafficlight.setProgram(tl_id, default_program)
-        print(f"[{tl_id}] Stage=RECOVERY restored default cycle")
+        if DEBUG_SIGNAL_LOGS:
+            print(f"[{tl_id}] Stage=RECOVERY restored default cycle")
         return 0
 
     phase_duration = traci.trafficlight.getPhaseDuration(tl_id)
     traci.trafficlight.setPhaseDuration(tl_id, max(3, phase_duration - 1))
-    print(f"[{tl_id}] Stage=RECOVERY gradual step={steps_left}")
+    if DEBUG_SIGNAL_LOGS:
+        print(f"[{tl_id}] Stage=RECOVERY gradual step={steps_left}")
     return steps_left
 
 
 def apply_green_wave(tl_id: str, ev_phase: int, time_to_arrival: float, arrival: float) -> None:
     traci.trafficlight.setPhase(tl_id, ev_phase)
     traci.trafficlight.setPhaseDuration(tl_id, max(3, int(time_to_arrival)))
-    print(f"[{tl_id}] GreenWave arrival={arrival:.1f} prepare_green")
+    if DEBUG_SIGNAL_LOGS:
+        print(f"[{tl_id}] GreenWave arrival={arrival:.1f} prepare_green")
 
 
 # Discrete RL action space (global controller applies to nearest upcoming TL).

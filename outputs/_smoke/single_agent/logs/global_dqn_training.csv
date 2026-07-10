@@ -1,0 +1,2 @@
+episode,controller_type,traffic_scale,total_reward,steps,epsilon,loss_last
+1,single_agent,1.00,-237.9934,150,0.9950,0.784322

@@ -47,6 +47,21 @@ MULTI_LEVEL_COORDINATED_DQN_TRAIN_TYPES = {
 }
 
 
+def _controller_slug(controller_type: str) -> str:
+    return {
+        CONTROLLER_SINGLE_AGENT: "global_dqn",
+        CONTROLLER_INDEPENDENT_MARL: "independent_marl_dqn",
+        CONTROLLER_COORDINATED_MARL: "coordinated_marl_dqn",
+        CONTROLLER_MULTI_LEVEL_COORDINATED_DQN: "multi_level_coordinated_dqn",
+        CONTROLLER_COORDINATED_DUELING_DQN: "coordinated_dueling_dqn",
+        CONTROLLER_GLOBAL_PPO: "global_ppo",
+        CONTROLLER_COORDINATED_PPO: "coordinated_ppo",
+        CONTROLLER_ADAPTIVE_REWARD_COORDINATED_PPO: "adaptive_reward_coordinated_ppo",
+        CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO: "congestion_aware_coordinated_ppo",
+        CONTROLLER_MULTI_LEVEL_COORDINATED_PPO: "multi_level_coordinated_ppo",
+    }.get(controller_type, controller_type)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train DQN traffic signal controller (SUMO + TraCI).")
     p.add_argument("--sumocfg", default="scenario/simulation.sumocfg")
@@ -69,6 +84,11 @@ def parse_args() -> argparse.Namespace:
         "--probe-log",
         default=None,
         help="Append red-signal action probe rows",
+    )
+    p.add_argument(
+        "--output-root",
+        default=None,
+        help="Root directory for isolated training outputs (logs/csv/checkpoints)",
     )
     p.add_argument(
         "--controller-type",
@@ -97,9 +117,28 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+
+
 def _default_paths(args: argparse.Namespace) -> None:
     if args.controller_type == "multi_agent":
         args.controller_type = CONTROLLER_INDEPENDENT_MARL
+
+    if args.output_root:
+        output_root = Path(args.output_root).resolve()
+        checkpoint_dir = output_root / "checkpoints"
+        log_dir = output_root / "logs"
+        csv_dir = output_root / "csv"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        args.checkpoint_dir = str(checkpoint_dir)
+        if args.model_out is None:
+            args.model_out = str(checkpoint_dir / "latest.pt")
+        if args.reward_log is None:
+            args.reward_log = str(log_dir / f"{_controller_slug(args.controller_type)}_training.csv")
+        if args.probe_log is None and args.controller_type in (COORDINATED_PPO_TRAIN_TYPES | MULTI_LEVEL_COORDINATED_DQN_TRAIN_TYPES):
+            args.probe_log = str(log_dir / f"{_controller_slug(args.controller_type)}_action_probe.csv")
+        return
 
     if args.controller_type == CONTROLLER_COORDINATED_PPO:
         if args.model_out is None:
@@ -142,11 +181,14 @@ def _default_paths(args: argparse.Namespace) -> None:
         if args.reward_log is None:
             args.reward_log = str(PROJECT_ROOT / "outputs" / "logs" / "rl_training_rewards.csv")
 
+    args.checkpoint_dir = str(Path(args.model_out).resolve().parent)
+
     if args.probe_log is None and args.controller_type in (COORDINATED_PPO_TRAIN_TYPES | MULTI_LEVEL_COORDINATED_DQN_TRAIN_TYPES):
         args.probe_log = str(PROJECT_ROOT / "outputs" / "logs" / f"{args.controller_type}_action_probe.csv")
 
 
 def main() -> None:
+
     args = parse_args()
     _default_paths(args)
 
@@ -156,15 +198,16 @@ def main() -> None:
     elif args.controller_type in {CONTROLLER_COORDINATED_PPO, CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO, CONTROLLER_ADAPTIVE_REWARD_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
         env_controller_type = args.controller_type
 
+    output_root = Path(args.output_root).resolve() if args.output_root else PROJECT_ROOT / "outputs"
     cfg = SimulationConfig(
         sumo_config=args.sumocfg,
         use_gui=False,
         ev_id=args.ev_id,
         max_steps=args.max_steps,
-        output_dir=PROJECT_ROOT / "outputs",
-        log_dir=PROJECT_ROOT / "outputs" / "logs",
-        plot_dir=PROJECT_ROOT / "outputs" / "plots",
-        csv_dir=PROJECT_ROOT / "outputs" / "csv",
+        output_dir=output_root,
+        log_dir=output_root / "logs",
+        plot_dir=output_root / "plots",
+        csv_dir=output_root / "csv",
     )
     env = TrafficEnv(
         cfg,
@@ -651,9 +694,9 @@ def main() -> None:
             else:
                 agent.decay_epsilon()
                 agent.save(args.model_out)
-                if args.controller_type == CONTROLLER_MULTI_LEVEL_COORDINATED_DQN:
-                    episode_ckpt = Path(args.model_out).with_name(f"multi_level_coordinated_dqn_ep{ep + 1}.pt")
-                    agent.save(episode_ckpt)
+                checkpoint_dir = Path(getattr(args, "checkpoint_dir", Path(args.model_out).resolve().parent))
+                episode_ckpt = checkpoint_dir / f"ep{ep + 1}.pt"
+                agent.save(episode_ckpt)
 
             runtime_seconds = time.perf_counter() - episode_start
             adaptive_diag = env.get_adaptive_episode_diagnostics() if args.controller_type == CONTROLLER_ADAPTIVE_REWARD_COORDINATED_PPO else {}

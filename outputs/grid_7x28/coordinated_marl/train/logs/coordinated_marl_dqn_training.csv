@@ -1,0 +1,8 @@
+episode,controller_type,traffic_scale,total_reward,steps,epsilon,loss_last
+1,coordinated_marl,1.00,46266.6921,139,0.9950,0.051200
+2,coordinated_marl,1.00,46256.6375,139,0.9900,0.058682
+3,coordinated_marl,1.00,46253.6381,139,0.9851,0.293895
+4,coordinated_marl,1.00,46258.1237,139,0.9801,0.036666
+5,coordinated_marl,1.00,46270.4914,139,0.9752,0.272745
+6,coordinated_marl,1.00,46274.0199,139,0.9704,1.635391
+7,coordinated_marl,1.00,46246.9646,139,0.9655,1.723096
