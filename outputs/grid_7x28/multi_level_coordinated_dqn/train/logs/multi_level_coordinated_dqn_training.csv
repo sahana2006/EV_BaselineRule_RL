@@ -1,1 +1,8 @@
 episode,controller_type,state_dim,reward,loss,epsilon,runtime_seconds,local_reward_contribution,neighbor_coordination_contribution,global_optimization_contribution,avg_neighbor_congestion,avg_global_congestion,avg_neighbor_waiting_time,action_0_pct,action_1_pct,action_2_pct
+1,multi_level_coordinated_dqn,29,12443.8467,0.009337,0.9950,1754.5681,-1.0712,-0.0295,1.3181,0.2569,0.8816,1.1771,33.40,33.12,33.48
+2,multi_level_coordinated_dqn,29,12463.6659,0.014312,0.9900,2272.1708,-1.0665,-0.0165,1.3194,0.2470,0.8872,1.0944,33.68,32.94,33.38
+3,multi_level_coordinated_dqn,29,12523.0597,0.029020,0.9851,910.4647,-1.0708,-0.0294,1.3183,0.2570,0.8803,1.1560,33.35,33.68,32.97
+4,multi_level_coordinated_dqn,29,12356.5510,0.006383,0.9801,666.7754,-1.0675,-0.0189,1.3182,0.2490,0.8886,1.1271,33.22,33.39,33.39
+5,multi_level_coordinated_dqn,29,12421.9726,0.016133,0.9752,669.9893,-1.0666,-0.0167,1.3189,0.2473,0.8884,1.1150,32.71,33.88,33.41
+6,multi_level_coordinated_dqn,29,12280.9815,0.014499,0.9704,694.3638,-1.0678,-0.0211,1.3175,0.2507,0.8889,1.1361,33.47,33.16,33.37
+7,multi_level_coordinated_dqn,29,12516.6033,0.025320,0.9655,905.5717,-1.0664,-0.0168,1.3189,0.2479,0.8871,1.1155,32.46,34.33,33.21
