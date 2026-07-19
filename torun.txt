@@ -97,3 +97,4 @@ python src/main.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --mode coordin
 # Multi-Level Coordinated DQN train/test
 python src/train_rl.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --controller-type multi_level_coordinated_dqn --ev-id ev_3 --episodes 80 --output-root outputs/grid_7x28/multi_level_coordinated_dqn/train
 python src/main.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --mode multi_level_coordinated_dqn --multi-level-coordinated-dqn-model-path outputs/grid_7x28/multi_level_coordinated_dqn/train/checkpoints/latest.pt --headless --ev-id ev_3 --output-root outputs/grid_7x28/multi_level_coordinated_dqn/eval
+
