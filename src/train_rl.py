@@ -127,9 +127,11 @@ def _default_paths(args: argparse.Namespace) -> None:
         output_root = Path(args.output_root).resolve()
         checkpoint_dir = output_root / "checkpoints"
         log_dir = output_root / "logs"
+        plot_dir = output_root / "plots"
         csv_dir = output_root / "csv"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         log_dir.mkdir(parents=True, exist_ok=True)
+        plot_dir.mkdir(parents=True, exist_ok=True)
         csv_dir.mkdir(parents=True, exist_ok=True)
         args.checkpoint_dir = str(checkpoint_dir)
         if args.model_out is None:
@@ -695,8 +697,13 @@ def main() -> None:
                 agent.decay_epsilon()
                 agent.save(args.model_out)
                 checkpoint_dir = Path(getattr(args, "checkpoint_dir", Path(args.model_out).resolve().parent))
-                episode_ckpt = checkpoint_dir / f"ep{ep + 1}.pt"
+                latest_ckpt = checkpoint_dir / "latest.pt"
+                if Path(args.model_out).resolve() != latest_ckpt.resolve():
+                    agent.save(latest_ckpt)
+                episode_ckpt = checkpoint_dir / f"episode_{ep + 1:03d}.pt"
                 agent.save(episode_ckpt)
+                legacy_episode_ckpt = checkpoint_dir / f"ep{ep + 1}.pt"
+                agent.save(legacy_episode_ckpt)
 
             runtime_seconds = time.perf_counter() - episode_start
             adaptive_diag = env.get_adaptive_episode_diagnostics() if args.controller_type == CONTROLLER_ADAPTIVE_REWARD_COORDINATED_PPO else {}

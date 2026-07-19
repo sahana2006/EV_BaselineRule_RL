@@ -98,3 +98,23 @@ python src/main.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --mode coordin
 python src/train_rl.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --controller-type multi_level_coordinated_dqn --ev-id ev_3 --episodes 80 --output-root outputs/grid_7x28/multi_level_coordinated_dqn/train
 python src/main.py --sumocfg scenario/grid_7x28/grid_7x28.sumocfg --mode multi_level_coordinated_dqn --multi-level-coordinated-dqn-model-path outputs/grid_7x28/multi_level_coordinated_dqn/train/checkpoints/latest.pt --headless --ev-id ev_3 --output-root outputs/grid_7x28/multi_level_coordinated_dqn/eval
 
+# Grid 6x6 bidirectional
+# Generate the new scenario once:
+python scenario/grid6x6_bidirectional/generate_grid6x6_bidirectional.py
+
+rule-based
+python src/main.py --sumocfg scenario/grid6x6_bidirectional/grid6x6_bidirectional.sumocfg --mode full_model --ev-id ev_0 --output-root outputs/grid6x6_bidirectional/rule_based/eval
+
+# Route-scoped outputs to avoid overwriting results across ev_0, ev_1, and ev_2
+# Global DQN / Coordinated MARL / Multi-Level Coordinated DQN follow the same pattern:
+#   outputs/grid6x6_bidirectional/<controller>_<route>/train
+#   outputs/grid6x6_bidirectional/<controller>_<route>/eval
+# Example for Route 0
+python src/train_rl.py --sumocfg scenario/grid6x6_bidirectional/grid6x6_bidirectional.sumocfg --controller-type single_agent --ev-id ev_0 --episodes 80 --output-root outputs/grid6x6_bidirectional/global_dqn_0/train
+python src/main.py --sumocfg scenario/grid6x6_bidirectional/grid6x6_bidirectional.sumocfg --mode rl_model --model-path outputs/grid6x6_bidirectional/global_dqn_0/train/checkpoints/latest.pt --ev-id ev_0 --output-root outputs/grid6x6_bidirectional/global_dqn_0/eval
+python src/train_rl.py --sumocfg scenario/grid6x6_bidirectional/grid6x6_bidirectional.sumocfg --controller-type coordinated_marl --ev-id ev_0 --episodes 80 --output-root outputs/grid6x6_bidirectional/coordinated_marl_0/train
+python src/main.py --sumocfg scenario/grid6x6_bidirectional/grid6x6_bidirectional.sumocfg --mode coordinated_marl_model --coordinated-marl-model-path outputs/grid6x6_bidirectional/coordinated_marl_0/train/checkpoints/latest.pt --headless --ev-id ev_0 --output-root outputs/grid6x6_bidirectional/coordinated_marl_0/eval
+python src/train_rl.py --sumocfg scenario/grid6x6_bidirectional/grid6x6_bidirectional.sumocfg --controller-type multi_level_coordinated_dqn --ev-id ev_0 --episodes 80 --output-root outputs/grid6x6_bidirectional/multi_level_coordinated_dqn_0/train
+python src/main.py --sumocfg scenario/grid6x6_bidirectional/grid6x6_bidirectional.sumocfg --mode multi_level_coordinated_dqn --multi-level-coordinated-dqn-model-path outputs/grid6x6_bidirectional/multi_level_coordinated_dqn_0/train/checkpoints/latest.pt --headless --ev-id ev_0 --output-root outputs/grid6x6_bidirectional/multi_level_coordinated_dqn_0/eval
+
+# Repeat the same structure for ev_1 and ev_2 by changing the route suffix to _1 or _2.
