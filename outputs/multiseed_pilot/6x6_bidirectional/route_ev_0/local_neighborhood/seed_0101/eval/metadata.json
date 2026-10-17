@@ -1,0 +1,9 @@
+{
+  "ablation": "local_neighborhood",
+  "ev_id": "ev_0",
+  "kind": "evaluation",
+  "max_steps": 3600,
+  "seed": 1000101,
+  "sumocfg": "scenario/grid6x6_bidirectional/grid6x6_bidirectional.sumocfg",
+  "traffic_scale": 1.0
+}

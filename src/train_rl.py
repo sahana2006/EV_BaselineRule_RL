@@ -33,6 +33,8 @@ from src.rl_env import (
     CONTROLLER_SINGLE_AGENT,
     TrafficEnv,
 )
+from src.ablation_config import ABLATIONS
+from src.reproducibility import seed_everything, write_json
 
 CONTROLLER_COORDINATED_DUELING_DQN = "coordinated_dueling_dqn"
 COORDINATED_PPO_TRAIN_TYPES = {
@@ -114,6 +116,9 @@ def parse_args() -> argparse.Namespace:
         default=1.0,
         help="SUMO demand scaling for moderate/heavy traffic experiments",
     )
+    p.add_argument("--seed", type=int, default=None, help="Base seed for Python, NumPy, PyTorch, and SUMO")
+    p.add_argument("--episode-seed-stride", type=int, default=1, help="SUMO seed increment per training episode")
+    p.add_argument("--ablation", choices=sorted(ABLATIONS), default=None, help="Explicit DQN observation ablation")
     return p.parse_args()
 
 
@@ -193,12 +198,17 @@ def main() -> None:
 
     args = parse_args()
     _default_paths(args)
+    if args.seed is not None:
+        seed_everything(args.seed)
+        print(f"[SEED] python_numpy_torch={args.seed} sumo_episode_1={args.seed}")
 
     env_controller_type = args.controller_type
     if args.controller_type == CONTROLLER_COORDINATED_DUELING_DQN:
         env_controller_type = CONTROLLER_COORDINATED_MARL
     elif args.controller_type in {CONTROLLER_COORDINATED_PPO, CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO, CONTROLLER_ADAPTIVE_REWARD_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
         env_controller_type = args.controller_type
+    if args.ablation is not None:
+        env_controller_type = CONTROLLER_COORDINATED_MARL
 
     output_root = Path(args.output_root).resolve() if args.output_root else PROJECT_ROOT / "outputs"
     cfg = SimulationConfig(
@@ -210,6 +220,7 @@ def main() -> None:
         log_dir=output_root / "logs",
         plot_dir=output_root / "plots",
         csv_dir=output_root / "csv",
+        sumo_seed=args.seed,
     )
     env = TrafficEnv(
         cfg,
@@ -217,7 +228,17 @@ def main() -> None:
         max_episode_steps=args.max_steps,
         controller_type=env_controller_type,
         traffic_scale=args.traffic_scale,
+        ablation=args.ablation,
+        sumo_seed=args.seed,
     )
+
+    write_json(output_root / "metadata.json", {
+        "kind": "training", "seed": args.seed, "episode_seed_stride": args.episode_seed_stride,
+        "controller_type": args.controller_type, "environment_controller_type": env_controller_type,
+        "ablation": args.ablation, "state_dim": env.state_dim, "action_dim": env.action_dim,
+        "sumocfg": args.sumocfg, "ev_id": args.ev_id, "episodes": args.episodes,
+        "max_steps": args.max_steps, "traffic_scale": args.traffic_scale,
+    })
 
     try:
         if args.controller_type in COORDINATED_PPO_TRAIN_TYPES:
@@ -356,6 +377,9 @@ def main() -> None:
 
         for ep in range(args.episodes):
             episode_start = time.perf_counter()
+            if args.seed is not None:
+                env.sumo_seed = args.seed + ep * args.episode_seed_stride
+                print(f"[SUMO_SEED] episode={ep + 1} seed={env.sumo_seed}")
             state = env.reset()
             agent_ids = env.get_agent_ids() or (sorted(state.keys()) if isinstance(state, dict) else [])
             if args.controller_type in COORDINATED_PPO_TRAIN_TYPES and not isinstance(state, dict):
@@ -522,7 +546,7 @@ def main() -> None:
                             last_loss, last_td_error = learn_result
                     state = next_state
                     total_r += float(sum(rewards.values()))
-                elif args.controller_type in {CONTROLLER_INDEPENDENT_MARL, CONTROLLER_COORDINATED_MARL, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
+                elif args.ablation is not None or args.controller_type in {CONTROLLER_INDEPENDENT_MARL, CONTROLLER_COORDINATED_MARL, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
                     if not isinstance(state, dict):
                         raise TypeError("Multi-agent training expected a dictionary of states.")
                     actions = agent.choose_actions(state, greedy=False)

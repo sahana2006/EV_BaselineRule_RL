@@ -12,6 +12,7 @@ import traci
 from traci import exceptions as traci_exceptions
 
 from .config import STOP_SPEED_THRESHOLD, SimulationConfig
+from .ablation_config import AblationConfig, get_ablation
 from .ev_detector import arrival_time, signal_distance
 from .route_utils import RouteSignal, ordered_route_signals, route_progress_for_vehicle
 from .signal_manager import apply_discrete_rl_action, infer_ev_green_phase
@@ -358,6 +359,8 @@ class TrafficEnv:
         intersection_clear_bonus: float = 2.0,
         controller_type: str = CONTROLLER_SINGLE_AGENT,
         traffic_scale: float = 1.0,
+        ablation: str | None = None,
+        sumo_seed: int | None = None,
         debug_logs: bool = False,
         profile_runtime: bool = False,
     ) -> None:
@@ -369,6 +372,8 @@ class TrafficEnv:
         self.profile_runtime = profile_runtime
         self.controller_type = controller_type
         self.traffic_scale = traffic_scale
+        self.ablation: AblationConfig | None = get_ablation(ablation)
+        self.sumo_seed = sumo_seed if sumo_seed is not None else config.sumo_seed
         self.ev_id = config.ev_id
         self.step_length = config.step_length
 
@@ -447,6 +452,8 @@ class TrafficEnv:
         if not os.path.exists(sumocfg_path):
             raise FileNotFoundError(f"SUMO config not found: {sumocfg_path}")
         start_cmd = [sumo_binary, "-c", sumocfg_path, "--step-length", str(self.step_length)]
+        if self.sumo_seed is not None:
+            start_cmd.extend(["--seed", str(self.sumo_seed)])
         if self.traffic_scale != 1.0:
             start_cmd.extend(["--scale", str(self.traffic_scale)])
         if not self.headless:
@@ -655,6 +662,8 @@ class TrafficEnv:
 
     @property
     def state_dim(self) -> int:
+        if self.ablation is not None:
+            return self.ablation.state_dim
         if self.controller_type in {CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
             return MULTI_LEVEL_COORDINATED_STATE_DIM
         if self.controller_type == CONTROLLER_CONGESTION_AWARE_COORDINATED_PPO:
@@ -1115,7 +1124,7 @@ class TrafficEnv:
         cache = self._step_cache or self._current_step_cache()
         speed = cache.vehicle_speeds.get(self.ev_id, 0.0) if cache.ev_present else 0.0
         speed_norm = float(np.clip(speed / 25.0, 0.0, 1.0))
-        return [
+        values = [
             ctx.ev_distance_norm,
             speed_norm,
             float(np.clip(ctx.queues["north"] / 20.0, 0.0, 1.0)),
@@ -1125,16 +1134,26 @@ class TrafficEnv:
             ctx.phase_norm,
             ctx.remaining_norm,
             float(np.clip(ctx.local_density / 40.0, 0.0, 1.0)),
-            float(np.clip(ctx.neighbor_queue_avg / 20.0, 0.0, 1.0)),
         ]
+        # Legacy modes retain the historical tenth neighbor-average-queue input.
+        if self.ablation is None:
+            values.append(float(np.clip(ctx.neighbor_queue_avg / 20.0, 0.0, 1.0)))
+        return values
 
     def _state_from_context(self, ctx: AgentContext, global_features: Dict[str, float] | None = None) -> np.ndarray:
         state_values = self._normalize_base_state(ctx)
         if global_features is None:
             global_features = self._global_traffic_features()
-        if self.coordination_enabled:
+        include_neighborhood = self.coordination_enabled
+        include_global = self.controller_type in {CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}
+        if self.ablation is not None:
+            include_neighborhood = self.ablation.include_neighborhood
+            include_global = self.ablation.include_global
+        if include_neighborhood:
             # Coordination features expose only compact neighbor summaries so each
             # intersection can reason about corridor health without a centralized state.
+            if self.ablation is not None:
+                state_values.append(float(np.clip(ctx.neighbor_queue_avg / 20.0, 0.0, 1.0)))
             state_values.extend(
                 [
                     float(np.clip(ctx.downstream_congestion / 2.0, 0.0, 1.0)),
@@ -1144,7 +1163,9 @@ class TrafficEnv:
                     float(np.clip(ctx.approaching_density, 0.0, 1.0)),
                 ]
             )
-        if self.controller_type in {CONTROLLER_MULTI_LEVEL_COORDINATED_PPO, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
+        # The six extended neighborhood features belong only to the full
+        # Local + Neighborhood + Global condition, preserving 15-D L+N.
+        if include_neighborhood and include_global:
             state_values.extend(
                 [
                     float(np.clip(ctx.neighbor_queue_std / 20.0, 0.0, 1.0)),
@@ -1153,6 +1174,11 @@ class TrafficEnv:
                     float(np.clip(ctx.downstream_spillback_indicator, 0.0, 1.0)),
                     float(np.clip(ctx.neighbor_throughput_estimate / 20.0, 0.0, 1.0)),
                     float(np.clip(ctx.neighbor_emergency_vehicle_present, 0.0, 1.0)),
+                ]
+            )
+        if include_global:
+            state_values.extend(
+                [
                     global_features["avg_queue_length"],
                     global_features["avg_waiting_time"],
                     global_features["total_network_congestion"],

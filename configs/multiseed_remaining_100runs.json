@@ -1,0 +1,13 @@
+{
+  "study_name": "multiseed_pilot",
+  "seeds": [101, 202, 303, 404, 505],
+  "episodes": 80,
+  "max_steps": 3600,
+  "traffic_scale": 1.0,
+  "ablations": ["local", "local_neighborhood", "local_global", "local_neighborhood_global"],
+  "networks": [
+    {"name": "4x4", "sumocfg": "scenario/grid/grid.sumocfg", "routes": ["ev_1"]},
+    {"name": "6x6_bidirectional", "sumocfg": "scenario/grid6x6_bidirectional/grid6x6_bidirectional.sumocfg", "routes": ["ev_0", "ev_1"]},
+    {"name": "7x28", "sumocfg": "scenario/grid_7x28/grid_7x28.sumocfg", "routes": ["ev_0", "ev_1"]}
+  ]
+}

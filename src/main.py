@@ -39,6 +39,8 @@ from src.rl_env import (
     CONTROLLER_SINGLE_AGENT,
     TrafficEnv,
 )
+from src.ablation_config import ABLATIONS
+from src.reproducibility import seed_everything, write_json
 from src.route_utils import active_emergency_vehicle_ids
 
 CONTROLLER_RULE_BASED = "rule_based"
@@ -453,17 +455,22 @@ def run_rl_scenario(
     *,
     controller_type: str,
     traffic_scale: float = 1.0,
+    ablation: str | None = None,
+    sumo_seed: int | None = None,
 ) -> Dict[str, Any]:
     path = Path(model_path)
     if not path.is_file():
         raise FileNotFoundError(f"RL checkpoint not found: {path}. Train first: python src/train_rl.py --model-out {path}")
 
+    effective_controller_type = CONTROLLER_COORDINATED_MARL if ablation is not None else controller_type
     env = TrafficEnv(
         config,
         headless=not config.use_gui,
         max_episode_steps=config.max_steps,
-        controller_type=controller_type,
+        controller_type=effective_controller_type,
         traffic_scale=traffic_scale,
+        ablation=ablation,
+        sumo_seed=sumo_seed,
     )
     agent = DQNAgent(state_dim=env.state_dim, action_dim=ACTION_DIM)
     agent.load(path)
@@ -517,7 +524,7 @@ def run_rl_scenario(
 
         done = False
         while not done:
-            if controller_type in {CONTROLLER_INDEPENDENT_MARL, CONTROLLER_COORDINATED_MARL, CONTROLLER_MULTI_LEVEL_COORDINATED_DQN}:
+            if env.is_multi_agent:
                 if not isinstance(state, dict):
                     raise TypeError("Expected multi-agent state dictionary.")
                 actions = agent.choose_actions(state, greedy=True)
@@ -1247,6 +1254,8 @@ def execute_single(
     independent_marl_model_path: str | None = None,
     coordinated_marl_model_path: str | None = None,
     traffic_scale: float = 1.0,
+    ablation: str | None = None,
+    sumo_seed: int | None = None,
 ) -> None:
     ensure_output_dirs(config)
     print(f"Running single scenario mode={mode} traffic_scale={traffic_scale:.2f}")
@@ -1259,6 +1268,8 @@ def execute_single(
             csv_name=config.rl_model_csv_name,
             controller_type=CONTROLLER_SINGLE_AGENT,
             traffic_scale=traffic_scale,
+            ablation=ablation,
+            sumo_seed=sumo_seed,
         )
     elif mode == "coordinated_ppo":
         if not coordinated_ppo_model_path:
@@ -1312,6 +1323,8 @@ def execute_single(
             csv_name=config.multi_level_coordinated_dqn_model_csv_name,
             controller_type=CONTROLLER_MULTI_LEVEL_COORDINATED_DQN,
             traffic_scale=traffic_scale,
+            ablation=ablation,
+            sumo_seed=sumo_seed,
         )
     elif mode == "coordinated_dueling_dqn":
         if not coord_dueling_model_path:
@@ -1342,6 +1355,8 @@ def execute_single(
             csv_name="independent_marl_model_metrics.csv",
             controller_type=CONTROLLER_INDEPENDENT_MARL,
             traffic_scale=traffic_scale,
+            ablation=ablation,
+            sumo_seed=sumo_seed,
         )
     elif mode in {"coordinated_marl_model", "marl_model"}:
         if not coordinated_marl_model_path:
@@ -1352,6 +1367,8 @@ def execute_single(
             csv_name="coordinated_marl_model_metrics.csv",
             controller_type=CONTROLLER_COORDINATED_MARL,
             traffic_scale=traffic_scale,
+            ablation=ablation,
+            sumo_seed=sumo_seed,
         )
     else:
         summary = run_scenario(config, mode=mode, csv_name=config.csv_name, traffic_scale=traffic_scale)
@@ -1681,6 +1698,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compare-all", action="store_true", help="Run rule-based vs single-agent RL vs independent MARL vs coordinated MARL")
     parser.add_argument("--compare-runs", type=int, default=5, help="Number of repeated trials for --compare-all")
     parser.add_argument("--traffic-scale", type=float, default=1.0, help="SUMO demand scaling for heavy-traffic experiments")
+    parser.add_argument("--seed", type=int, default=None, help="Evaluation seed for Python, NumPy, PyTorch, and SUMO")
+    parser.add_argument("--ablation", choices=sorted(ABLATIONS), default=None, help="Explicit DQN observation ablation")
     parser.add_argument(
         "--mode",
         choices=["full_model", "fixed_time", "intrusive_only", "rl_model", "coordinated_dueling_dqn", "global_ppo", "coordinated_ppo", "adaptive_reward_coordinated_ppo", "congestion_aware_coordinated_ppo", "multi_level_coordinated_ppo", "multi_level_coordinated_dqn", "independent_marl_model", "coordinated_marl_model", "marl_model"],
@@ -1743,6 +1762,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.seed is not None:
+        seed_everything(args.seed)
+        print(f"[SEED] python_numpy_torch_sumo={args.seed}")
     if args.legacy_marl_model_path:
         args.coordinated_marl_model_path = args.legacy_marl_model_path
     output_root = Path(args.output_root).resolve() if args.output_root else PROJECT_ROOT / "outputs"
@@ -1756,7 +1778,13 @@ def main() -> None:
         log_dir=output_root / "logs",
         plot_dir=output_root / "plots",
         csv_dir=output_root / "csv",
+        sumo_seed=args.seed,
     )
+    write_json(output_root / "metadata.json", {
+        "kind": "evaluation", "seed": args.seed, "ablation": args.ablation,
+        "sumocfg": args.sumocfg, "ev_id": args.ev_id, "max_steps": args.max_steps,
+        "traffic_scale": args.traffic_scale,
+    })
 
     if args.compare_ppo_trace:
         run_compare_coordinated_ppo_pipeline(
@@ -1829,6 +1857,8 @@ def main() -> None:
         independent_marl_model_path=args.independent_marl_model_path if args.mode == "independent_marl_model" else args.independent_marl_model_path,
         coordinated_marl_model_path=args.coordinated_marl_model_path if args.mode in {"coordinated_marl_model", "marl_model"} else args.coordinated_marl_model_path,
         traffic_scale=args.traffic_scale,
+        ablation=args.ablation,
+        sumo_seed=args.seed,
     )
 
 

@@ -27,6 +27,7 @@ class SimulationConfig:
     post_ev_buffer_seconds: int = 90
     ev_color_rgba: tuple[int, int, int, int] = (255, 0, 0, 255)
     normal_vehicle_color_rgba: tuple[int, int, int, int] = (0, 90, 255, 255)
+    sumo_seed: int | None = None
 
 
 SATURATION_DISTANCE_THRESHOLD = 150.0

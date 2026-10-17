@@ -1,0 +1,11 @@
+# PyTorch checkpoints
+*.pt
+*.pth
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.env/
