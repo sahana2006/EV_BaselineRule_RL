@@ -1,0 +1,15 @@
+{
+  "ablation": "local_global",
+  "action_dim": 3,
+  "controller_type": "coordinated_marl",
+  "environment_controller_type": "coordinated_marl",
+  "episode_seed_stride": 1,
+  "episodes": 80,
+  "ev_id": "ev_0",
+  "kind": "training",
+  "max_steps": 3600,
+  "seed": 101,
+  "state_dim": 17,
+  "sumocfg": "scenario/grid_7x28/grid_7x28.sumocfg",
+  "traffic_scale": 1.0
+}

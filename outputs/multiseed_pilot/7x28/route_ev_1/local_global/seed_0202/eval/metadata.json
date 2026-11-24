@@ -1,0 +1,9 @@
+{
+  "ablation": "local_global",
+  "ev_id": "ev_1",
+  "kind": "evaluation",
+  "max_steps": 3600,
+  "seed": 1000202,
+  "sumocfg": "scenario/grid_7x28/grid_7x28.sumocfg",
+  "traffic_scale": 1.0
+}

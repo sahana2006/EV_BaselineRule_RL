@@ -37,3 +37,58 @@ All major updates, structural decisions, and phase completions for the multi-see
 ## [2026-10-11] 100-Run Execution Resumed (Second Restart)
 - **Action**: Interrupted again by a server restart. Audited outputs, found 43/100 completed runs (63/120 total), cleaned 1 partial run (`6x6_bidirectional/route_ev_1/local/seed_0404`), and resumed the batch.
 - **Status**: Running in the background.
+
+## [2026-10-17] Execution Resumed (After Pause)
+- **Action**: Resumed execution after user pause. Audited outputs, found 61/100 completed runs (81/120 total), cleaned 1 partial run (`7x28/route_ev_0/local/seed_0202`), and resumed the batch for the remaining 39 runs.
+- **Status**: Running in the background.
+
+## [2026-10-21] Run Failure Diagnosis & Execution Resumption
+- **Action**: Task interrupted during training of run `7x28/route_ev_0/local_global/seed_0505` with exit code `1073807364` (`STATUS_CONTROL_C_EXIT`) due to server restart.
+- **Diagnosis**: Subprocess terminated externally by system restart at episode 5; no algorithmic defect or script error.
+- **Resolution**: Removed incomplete run directory `7x28/route_ev_0/local_global/seed_0505`. Audited outputs: 94/120 total runs completed (74/100 of the remaining matrix). Resumed execution for the affected run and remaining 26 runs.
+- **Status**: Running in the background.
+
+## [2026-10-24] Execution Resumed (100/120 Runs Accounted For)
+- **Action**: Background process was stopped by server restart during training of `7x28/route_ev_1/local/seed_0101` at episode 22.
+- **Diagnosis**: Subprocess terminated by system reboot. Removed incomplete run directory `7x28/route_ev_1/local/seed_0101`.
+- **Progress**: 100/120 total runs (80/100 of the 100-run matrix) verified complete in `raw_metrics_combined.csv`.
+- **Status**: Resumed execution for the final 20 runs (`7x28/route_ev_1`: 4 ablations × 5 seeds) in the background.
+
+## [2026-10-26] Execution Resumed (102/120 Runs Accounted For)
+- **Action**: Background process stopped by server restart during training of `7x28/route_ev_1/local/seed_0303` at episode 12.
+- **Diagnosis**: Subprocess terminated by system reboot. Removed incomplete run directory `7x28/route_ev_1/local/seed_0303`.
+- **Progress**: 102/120 total runs (82/100 of the 100-run matrix) verified complete in `raw_metrics_combined.csv`.
+- **Status**: Resumed execution for the remaining 18 runs in the background.
+
+## [2026-10-27] Execution Resumed (7x28 / route_ev_1 / local / seed_0303)
+- **Action**: Background task stopped by server restart during training of `7x28/route_ev_1/local/seed_0303` at episode 30.
+- **Diagnosis**: Process termination due to system reboot. Cleaned incomplete run directory `7x28/route_ev_1/local/seed_0303`.
+- **Progress**: 102/120 runs verified in `raw_metrics_combined.csv`.
+- **Status**: Resumed execution from `7x28/route_ev_1/local/seed_0303` for the remaining 18 runs in the background.
+
+## [2026-11-02] Task 2 Step 4 Resumed (7x28 / route_ev_1 / local / seed_0303)
+- **Action**: Overnight execution stopped by server reboot after completing 29 episodes of `seed_0303` at 02:19 AM.
+- **Diagnosis**: Subprocess terminated by system reboot. Archived partial run directory to `7x28/route_ev_1/local/seed_0303_partial_ep29_backup` to preserve all 29 checkpoints and logs.
+- **Progress**: 102/120 runs verified complete in `raw_metrics_combined.csv`.
+- **Status**: Resumed execution for the remaining 18 runs using `configs/multiseed_remaining_100runs.json`. Active worker PID 10616 and SUMO PID 13108 executing Episode 1.
+
+## [2026-11-20] Task 2 Step 4: 117/120 Runs Verified; Resumed Final 3 Runs
+- **Action**: 117 runs verified complete in `raw_metrics_combined.csv`. Only 3 runs remaining (`7x28/route_ev_1/local_neighborhood_global` seeds 303, 404, 505).
+- **Diagnosis**: Process interrupted during seed 303 at episode 71 by server reboot. Preserved 143 partial checkpoint files to `seed_0303_partial_backup`.
+- **Status**: Resumed execution of remaining runs via `task-423` using `scripts/run_multiseed.py`.
+
+## [2026-11-22] Task 2 Step 4: 118/120 Runs Verified; Resumed Final 2 Runs
+- **Action**: Seed 303 fully completed and evaluated (118/120 runs logged in `raw_metrics_combined.csv`).
+- **Diagnosis**: Server reboot interrupted seed 404 at episode 52. Preserved 105 partial checkpoints and logs to `seed_0404_partial_backup`.
+- **Status**: Resumed execution of the final 2 seeds (404 and 505) via `task-468`.
+
+## [2026-11-23] Task 2 Step 4: 100% Pilot Study Completed (120/120 Runs)
+- **Action**: Seeds 404 and 505 successfully trained for 80 episodes each and evaluated.
+- **Verification**:
+  - `raw_metrics_combined.csv` confirmed at exactly 120 rows (24 experimental groups × 5 seeds).
+  - All 120 evaluation metric files (`eval/csv/coordinated_marl_model_metrics.csv`) verified intact.
+  - Re-executed `scripts/audit_existing_metrics.py` generating `outputs/task1_metric_audit/pilot_corrected_metrics.csv` (120 audited rows).
+  - Executed `scripts/analyze_multiseed.py` generating full statistical summary (`outputs/multiseed_pilot/analysis/summary_mean_sd_ci.csv`, `paper_table_mean_pm_sd.csv`, `paper_table_mean_95ci.csv`).
+- **Result**: MLC-DQN Task 2 multi-seed pilot is 100% COMPLETE.
+
+

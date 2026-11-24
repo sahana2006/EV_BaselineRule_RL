@@ -35,6 +35,6 @@ COMPLETED & VERIFIED.
   - Generated plots verified in `outputs/multiseed_pilot/4x4/route_ev_0/<ablation>/seed_<seed>/eval/plots/`.
 
 ## 100-Run Execution (In Progress)
-- **Status**: Interrupted again by a server restart. Audited and found 43/100 completed runs (63/120 total). Cleaned 1 incomplete run (`6x6_bidirectional/route_ev_1/local/seed_0404`) and resumed execution. Actively running in the background.
+- **Status**: Resumed execution after pause/server restart. Cleaned interrupted run folder (`7x28/route_ev_1/local/seed_0303`). Audited and verified that **102 / 120 total runs** (82 / 100 of the 100-run matrix) are complete in `raw_metrics_combined.csv`. Processing the remaining 18 runs starting from `7x28/route_ev_1/local/seed_0303` in the background.
 - **Scope**: 5 additional network/route configurations × 4 ablations × 5 seeds.
 - **Configuration File**: `configs/multiseed_remaining_100runs.json`
